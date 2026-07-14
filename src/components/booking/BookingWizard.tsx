@@ -13,7 +13,7 @@ import {
   TriangleAlert,
   User,
 } from "lucide-react";
-import type { Barber, Service } from "@/lib/data/types";
+import type { Barber, BookingRules, Service } from "@/lib/data/types";
 import { availability, addDays, startOfDay } from "@/lib/data/mock";
 import { book } from "@/app/actions/book";
 import { Avatar } from "@/components/ui/Avatar";
@@ -31,13 +31,15 @@ type Props = {
   openDays: number[];
   services: Service[];
   barbers: Barber[];
+  /** Owner-configured booking rules (see /dashboard/configuracion/reservas). */
+  rules: BookingRules;
 };
 
 const STEPS = ["Servicio", "Barbero", "Fecha y hora", "Tus datos"];
 
 const ANY_BARBER = "any";
 
-export function BookingWizard({ shopName, openDays, services, barbers }: Props) {
+export function BookingWizard({ shopName, openDays, services, barbers, rules }: Props) {
   const [step, setStep] = useState(0);
   const [serviceId, setServiceId] = useState<string | null>(null);
   const [barberId, setBarberId] = useState<string>(ANY_BARBER);
@@ -53,18 +55,17 @@ export function BookingWizard({ shopName, openDays, services, barbers }: Props) 
 
   const service = services.find((s) => s.id === serviceId) ?? null;
 
-  // next 14 open days
+  // open days within the shop's booking horizon (maxAdvanceDays), capped for UI
   const days = useMemo(() => {
     const out: Date[] = [];
     let d = startOfDay(new Date());
-    let guard = 0;
-    while (out.length < 14 && guard < 40) {
+    const horizon = Math.min(rules.maxAdvanceDays, 60);
+    for (let i = 0; i <= horizon && out.length < 14; i++) {
       if (openDays.includes(d.getDay())) out.push(d);
       d = addDays(d, 1);
-      guard++;
     }
     return out;
-  }, [openDays]);
+  }, [openDays, rules.maxAdvanceDays]);
 
   const [activeDay, setActiveDay] = useState<Date>(days[0]);
 
@@ -75,18 +76,26 @@ export function BookingWizard({ shopName, openDays, services, barbers }: Props) 
 
   const slots = useMemo(() => {
     if (!serviceId) return [];
-    return availability(serviceId, activeDay, barberId);
-  }, [serviceId, activeDay, barberId]);
+    return availability(serviceId, activeDay, barberId, {
+      stepMin: rules.slotStepMin,
+      minNoticeMin: rules.minNoticeMin,
+    });
+  }, [serviceId, activeDay, barberId, rules.slotStepMin, rules.minNoticeMin]);
 
   const slot = slotIso ? new Date(slotIso) : null;
   const chosenBarber =
     barberId === ANY_BARBER ? null : barbers.find((b) => b.id === barberId) ?? null;
 
+  const emailOk =
+    !rules.requireEmail || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim());
   const canContinue =
     (step === 0 && !!serviceId) ||
     (step === 1 && !!barberId) ||
     (step === 2 && !!slotIso) ||
-    (step === 3 && form.name.trim().length > 1 && form.phone.trim().length >= 8);
+    (step === 3 &&
+      form.name.trim().length > 1 &&
+      form.phone.trim().length >= 8 &&
+      emailOk);
 
   async function next() {
     setError(null);
@@ -221,21 +230,29 @@ export function BookingWizard({ shopName, openDays, services, barbers }: Props) 
         )}
 
         {step === 1 && (
-          <Step title="¿Con quién?" subtitle="Elige tu barbero o deja que asignemos al primero disponible.">
+          <Step
+            title="¿Con quién?"
+            subtitle={
+              rules.allowBarberChoice
+                ? "Elige tu barbero o deja que asignemos al primero disponible."
+                : "Te asignamos al primer barbero disponible."
+            }
+          >
             <div className="grid gap-3 sm:grid-cols-2">
               <BarberOption
                 selected={barberId === ANY_BARBER}
                 onClick={() => setBarberId(ANY_BARBER)}
                 any
               />
-              {eligibleBarbers.map((b) => (
-                <BarberOption
-                  key={b.id}
-                  barber={b}
-                  selected={barberId === b.id}
-                  onClick={() => setBarberId(b.id)}
-                />
-              ))}
+              {rules.allowBarberChoice &&
+                eligibleBarbers.map((b) => (
+                  <BarberOption
+                    key={b.id}
+                    barber={b}
+                    selected={barberId === b.id}
+                    onClick={() => setBarberId(b.id)}
+                  />
+                ))}
             </div>
           </Step>
         )}
@@ -323,7 +340,11 @@ export function BookingWizard({ shopName, openDays, services, barbers }: Props) 
                   autoComplete="tel"
                 />
               </Field>
-              <Field icon={Mail} label="Correo (opcional)">
+              <Field
+                icon={Mail}
+                label={rules.requireEmail ? "Correo" : "Correo (opcional)"}
+                required={rules.requireEmail}
+              >
                 <input
                   value={form.email}
                   onChange={(e) => setForm({ ...form, email: e.target.value })}

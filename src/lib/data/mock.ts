@@ -264,22 +264,25 @@ export function barbersForService(serviceId: string): Barber[] {
 /**
  * Available start times for a service on a date.
  * barberId === "any" => slot is free if ANY qualified barber is free.
+ * `opts` carries the shop's configurable booking rules (slot granularity and
+ * minimum notice) — defaults preserve the original behavior.
  */
 export function availability(
   serviceId: string,
   date: Date,
   barberId: string,
+  opts?: { stepMin?: number; minNoticeMin?: number },
 ): Slot[] {
   const service = SERVICE_MAP[serviceId];
   if (!service) return [];
-  const now = new Date();
+  const step = opts?.stepMin ?? 15;
+  const earliest = addMinutes(new Date(), opts?.minNoticeMin ?? 0);
   const candidates =
     barberId === "any" ? barbersForService(serviceId) : [BARBER_MAP[barberId]];
 
   const dayAppts = appointmentsOn(date).filter((a) => ACTIVE.includes(a.status));
 
   const slots: Slot[] = [];
-  const step = 15;
   for (let m = SHOP.openHour * 60; m + service.durationMin <= SHOP.closeHour * 60; m += step) {
     const start = addMinutes(startOfDay(date), m);
     const end = addMinutes(start, service.durationMin);
@@ -297,7 +300,7 @@ export function availability(
         .getMinutes()
         .toString()
         .padStart(2, "0")}`,
-      available: freeBarber && start > now,
+      available: freeBarber && start > earliest,
     });
   }
   return slots;

@@ -3,10 +3,27 @@
 SaaS multi-tenant de **agendamiento de citas** para barberías. Tres superficies:
 
 1. **Landing** (`/`) — marketing premium, oscuro y cinematográfico.
-2. **Reserva pública** (`/[barberia]`, p. ej. `/el-filo`) — wizard de 4 pasos para que el cliente agende en ~30 s.
-3. **Panel del dueño** (`/dashboard`) — resumen, agenda visual, citas, servicios, barberos y clientes.
+2. **Reserva pública** — cada barbería vive en **su propio dominio**: `{slug}.navaja.app` automático o su dominio propio (`barberiaelfilo.com`), con fallback por path (`/el-filo`). Wizard de 4 pasos para agendar en ~30 s.
+3. **Panel del dueño** (`/dashboard`) — resumen, agenda visual, citas, servicios, barberos, clientes y **configuración auto-servicio completa**.
 
 > Proyecto de portafolio. La capa de datos es un mock tipado **listo para Supabase** (ver abajo).
+
+## Auto-servicio (cero tickets de soporte)
+
+Todo se configura desde `/dashboard/configuracion`, sin tocar código ni contactar a nadie:
+
+- **Negocio** — nombre, lema, teléfono, dirección, zona horaria, días y horario.
+- **Reservas** — intervalo de horarios, anticipación mínima, horizonte máximo,
+  confirmación automática, elección de barbero, correo obligatorio, ventana de
+  cancelación. Las reglas gobiernan el wizard público en vivo.
+- **Dominio** — subdominio `{slug}.navaja.app` editable + conexión de dominio
+  propio: instrucciones DNS (CNAME/A), verificación y SSL automático
+  (Caddy `on_demand_tls` en producción). El proxy resuelve el tenant por `Host`.
+- **Notificaciones** — confirmaciones, recordatorios 24 h/2 h, WhatsApp, avisos al dueño.
+- **Equipo** — invitaciones por correo con roles dueño/staff.
+- **Plan y facturación** — planes Esencial/Pro/Estudio, medidores de uso, facturas.
+
+En dev el routing multi-tenant funciona sin configurar nada: `el-filo.localhost:3000`.
 
 ## Stack
 
@@ -29,20 +46,23 @@ Rutas: `/` · `/el-filo` · `/dashboard` · `/dashboard/agenda` · `/dashboard/c
 
 ```
 src/
-├─ proxy.ts                    # 🔒 CSP con nonce + cabeceras de seguridad (Next 16)
+├─ proxy.ts                    # 🔒 CSP con nonce + cabeceras + routing multi-tenant por Host
 ├─ app/
 │  ├─ layout.tsx              # fuentes, metadata, force-dynamic (nonce CSP)
 │  ├─ page.tsx                # Landing
 │  ├─ error.tsx · global-error.tsx · not-found.tsx   # 🔒 boundaries sin fugas
 │  ├─ robots.ts              # 🔒 bloquea /dashboard en buscadores
 │  ├─ actions/book.ts        # 🔒 Server Action: rate-limit + Zod + honeypot
+│  ├─ actions/settings.ts    # 🔒 Server Actions de configuración (mismo pipeline)
 │  ├─ [shop]/page.tsx         # Reserva pública (valida slug → 404)
-│  └─ dashboard/             # layout + resumen, agenda, citas, servicios, barberos, clientes
+│  └─ dashboard/             # resumen, agenda, citas, servicios, barberos, clientes
+│     └─ configuracion/      # negocio · reservas · dominio · notificaciones · equipo · plan
 ├─ components/
-│  ├─ brand/ · ui/ · landing/ · booking/ · dashboard/
+│  ├─ brand/ · ui/ · landing/ · booking/ · dashboard/ · settings/
 └─ lib/
    ├─ utils.ts                # cn + formateadores es-MX
-   ├─ data/                   # types.ts (modelo) + mock.ts (datos + queries)
+   ├─ tenant.ts               # resolución host → tenant (subdominios y dominios propios)
+   ├─ data/                   # types.ts (modelo) + mock.ts (queries) + store.ts (settings)
    └─ security/               # 🔒 csp.ts · validation.ts · rate-limit.ts · env.ts
 supabase/                     # 🔒 schema.sql + policies.sql (RLS) + README
 SECURITY.md                   # 🔒 modelo de amenazas + controles + checklist

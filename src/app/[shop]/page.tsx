@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { MapPin, Star, Clock } from "lucide-react";
 import { SHOP, SERVICES, BARBERS } from "@/lib/data/mock";
+import { getBookingRules } from "@/lib/data/store";
 import { Logo } from "@/components/brand/Logo";
 import { BarberPole } from "@/components/brand/BarberPole";
 import { BookingWizard } from "@/components/booking/BookingWizard";
@@ -72,6 +73,7 @@ export default async function BookingPage({
             openDays={SHOP.openDays}
             services={SERVICES}
             barbers={BARBERS}
+            rules={getBookingRules()}
           />
         </div>
         <p className="mt-6 text-center text-xs text-stone-400">

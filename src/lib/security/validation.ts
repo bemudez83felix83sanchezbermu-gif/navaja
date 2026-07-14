@@ -66,6 +66,98 @@ export const bookingInputSchema = z
 
 export type BookingInput = z.infer<typeof bookingInputSchema>;
 
+/* ------------------------------------------------------------------ *
+ * Self-service settings (dashboard) — every mutation crosses this
+ * boundary before touching the store. Same rules as booking: strict
+ * objects, bounded strings, no mass-assignment.
+ * ------------------------------------------------------------------ */
+
+/** Tenant slug: becomes `{slug}.navaja.app`. Mirrors the DB check constraint. */
+export const slugSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .regex(/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/, "Solo minúsculas, números y guiones (2–40)")
+  .refine((s) => !s.includes("--"), "Sin guiones dobles");
+
+/** Reserved labels that can never be tenant subdomains. */
+export const RESERVED_SLUGS = new Set([
+  "www", "app", "api", "admin", "dashboard", "panel", "mail", "smtp",
+  "soporte", "ayuda", "blog", "docs", "status", "cdn", "assets", "dominios",
+]);
+
+/**
+ * Hostname (RFC-ish, pragmatic): labels of [a-z0-9-], at least one dot,
+ * no scheme/path/port. Lowercased on input.
+ */
+export const hostnameSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .max(253, "Dominio demasiado largo")
+  .regex(
+    /^(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$/,
+    "Escribe solo el dominio, p. ej. mibarberia.com",
+  );
+
+export const shopProfileSchema = z
+  .object({
+    name: boundedString(2, 80),
+    tagline: boundedString(0, 120).optional().default(""),
+    address: boundedString(0, 160).optional().default(""),
+    phone,
+    timezone: boundedString(2, 60),
+    openDays: z.array(z.number().int().min(0).max(6)).min(1, "Abre al menos un día").max(7),
+    openHour: z.number().int().min(0).max(23),
+    closeHour: z.number().int().min(1).max(24),
+  })
+  .strict()
+  .refine((d) => d.closeHour > d.openHour, {
+    message: "La hora de cierre debe ser después de la de apertura",
+    path: ["closeHour"],
+  });
+
+export const bookingRulesSchema = z
+  .object({
+    slotStepMin: z.union([z.literal(15), z.literal(20), z.literal(30), z.literal(60)]),
+    minNoticeMin: z.number().int().min(0).max(48 * 60),
+    maxAdvanceDays: z.number().int().min(1).max(180),
+    autoConfirm: z.boolean(),
+    cancellationWindowHours: z.number().int().min(0).max(72),
+    allowBarberChoice: z.boolean(),
+    requireEmail: z.boolean(),
+  })
+  .strict();
+
+export const notificationsSchema = z
+  .object({
+    confirmationEmail: z.boolean(),
+    reminder24h: z.boolean(),
+    reminder2h: z.boolean(),
+    whatsappChannel: z.boolean(),
+    ownerNewBookingEmail: z.boolean(),
+    senderName: boundedString(2, 60),
+  })
+  .strict();
+
+export const inviteMemberSchema = z
+  .object({
+    name: boundedString(2, 80),
+    email: z.string().trim().toLowerCase().email("Correo inválido").max(120),
+    role: z.enum(["owner", "staff"]),
+  })
+  .strict();
+
+export const planIdSchema = z.enum(["esencial", "pro", "estudio"]);
+
+/** Opaque store ids (dom_xxx, mem_xxx). */
+export const storeIdSchema = z
+  .string()
+  .trim()
+  .min(3)
+  .max(40)
+  .regex(/^[a-z]+_[a-zA-Z0-9-]+$/, "Identificador inválido");
+
 /**
  * Server-side environment validation schema. See `env.ts`.
  * All optional today (no backend yet); flip to required when Supabase is wired.

@@ -31,6 +31,9 @@ alter table services       enable row level security;
 alter table barber_services enable row level security;
 alter table clients        enable row level security;
 alter table appointments   enable row level security;
+alter table domains        enable row level security;
+alter table invitations    enable row level security;
+alter table subscriptions  enable row level security;
 
 -- ---- barbershops ----------------------------------------------------------
 create policy barbershops_public_read on barbershops
@@ -73,9 +76,28 @@ create policy clients_member_all on clients
 create policy appointments_member_all on appointments
   for all using (app_is_member(barbershop_id)) with check (app_is_member(barbershop_id));
 
+-- ---- domains (gestión solo miembros; el proxy resuelve con service_role) ---
+-- Lectura pública de dominios ACTIVOS: el edge/proxy puede cachear el mapa
+-- host→tenant sin exponer los que aún no verifican.
+create policy domains_public_read_active on domains
+  for select using (status = 'activo' or app_is_member(barbershop_id));
+create policy domains_member_write on domains
+  for all using (app_is_member(barbershop_id)) with check (app_is_member(barbershop_id));
+
+-- ---- invitations (solo miembros del shop; el token viaja por email) ---------
+create policy invitations_member_all on invitations
+  for all using (app_is_member(barbershop_id)) with check (app_is_member(barbershop_id));
+
+-- ---- subscriptions (lectura miembros; cambios de plan via backend/billing) --
+create policy subscriptions_member_read on subscriptions
+  for select using (app_is_member(barbershop_id));
+-- upgrades/downgrades pasan por el webhook de billing con service_role.
+
 -- Defensa en profundidad: revoca privilegios de tabla a anon en datos sensibles.
-revoke all on clients      from anon;
-revoke all on appointments from anon;
+revoke all on clients       from anon;
+revoke all on appointments  from anon;
+revoke all on invitations   from anon;
+revoke all on subscriptions from anon;
 
 -- ---- Vista pública de horarios ocupados (sin PII) -------------------------
 -- Expone SOLO barbero + rango horario para que el cliente calcule disponibilidad.

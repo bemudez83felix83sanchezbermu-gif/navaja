@@ -10,6 +10,7 @@ import {
   ListChecks,
   Menu,
   Scissors,
+  Settings,
   UserRound,
   Users,
   X,
@@ -26,6 +27,7 @@ const NAV = [
   { href: "/dashboard/servicios", label: "Servicios", icon: Scissors },
   { href: "/dashboard/barberos", label: "Barberos", icon: Users },
   { href: "/dashboard/clientes", label: "Clientes", icon: UserRound },
+  { href: "/dashboard/configuracion", label: "Configuración", icon: Settings },
 ];
 
 function NavList({ onNavigate }: { onNavigate?: () => void }) {
