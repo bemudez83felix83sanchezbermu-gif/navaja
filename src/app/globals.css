@@ -1,26 +1,168 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* ============================================================
+   NAVAJA — Design System
+   Premium dark + gold barbershop SaaS
+   ============================================================ */
+
+@theme {
+  /* ---- Brand & semantic colors ---- */
+  --color-ink: #0c0a09;          /* near-black foreground            */
+  --color-stone-950: #0c0a09;
+  --color-stone-900: #1c1917;    /* primary dark surface             */
+  --color-stone-800: #292524;
+  --color-stone-700: #44403c;
+  --color-stone-600: #57534e;
+  --color-stone-500: #78716c;
+  --color-stone-400: #a8a29e;
+  --color-stone-300: #d6d3d1;
+  --color-stone-200: #e7e2dd;
+  --color-stone-100: #f5f3f0;
+  --color-stone-50: #faf9f7;
+
+  --color-gold: #a16207;         /* accent — WCAG-safe on white/dark */
+  --color-gold-600: #b1730d;
+  --color-gold-500: #ca8a04;     /* decorative highlight             */
+  --color-gold-400: #d4a23a;
+  --color-gold-300: #e8c986;
+
+  --color-cream: #faf9f7;        /* app background                   */
+  --color-card: #ffffff;
+  --color-muted: #f1efec;
+  --color-muted-foreground: #78716c;
+  --color-border: #e7e2dd;
+
+  --color-success: #047857;
+  --color-success-bg: #ecfdf5;
+  --color-warning: #b45309;
+  --color-warning-bg: #fffbeb;
+  --color-destructive: #dc2626;
+  --color-destructive-bg: #fef2f2;
+  --color-info: #0369a1;
+
+  /* ---- Typography ---- */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-playfair), ui-serif, Georgia, serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, monospace;
+
+  /* ---- Radius ---- */
+  --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;
+
+  /* ---- Easing & motion ---- */
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* ---- Shadows (sharp, premium) ---- */
+  --shadow-card: 0 1px 2px rgb(28 25 23 / 0.04), 0 4px 16px rgb(28 25 23 / 0.06);
+  --shadow-lift: 0 8px 30px rgb(28 25 23 / 0.10);
+  --shadow-gold: 0 8px 40px rgb(161 98 7 / 0.28);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/* ============================================================
+   Base
+   ============================================================ */
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
+  }
+  body {
+    background: var(--color-cream);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-feature-settings: "ss01", "cv01";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: var(--color-gold);
+    color: #fff;
+  }
+  /* Tabular figures for data/time everywhere it matters */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+  /* Visible, on-brand focus ring */
+  :focus-visible {
+    outline: 2px solid var(--color-gold);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  h1, h2, h3 {
+    text-wrap: balance;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* ============================================================
+   Brand utilities
+   ============================================================ */
+@layer utilities {
+  /* Subtle film grain overlay for dark hero sections */
+  .grain {
+    position: relative;
+  }
+  .grain::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.5;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 240 240' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.32'/%3E%3C/svg%3E");
+  }
+
+  /* Warm gold radial glow */
+  .glow-gold {
+    background-image: radial-gradient(
+      60% 60% at 70% 30%,
+      rgb(202 138 4 / 0.22) 0%,
+      rgb(202 138 4 / 0) 70%
+    );
+  }
+
+  /* Barber-pole diagonal stripe band */
+  .barber-pole {
+    background-image: repeating-linear-gradient(
+      45deg,
+      var(--color-gold) 0 10px,
+      #fff 10px 20px,
+      var(--color-stone-900) 20px 30px,
+      #fff 30px 40px
+    );
+  }
+
+  /* Hairline divider that reads in light & dark */
+  .hairline {
+    border-color: color-mix(in oklab, currentColor 12%, transparent);
+  }
+
+  /* Gold gradient text */
+  .text-gradient-gold {
+    background: linear-gradient(95deg, var(--color-gold-300), var(--color-gold-500) 55%, var(--color-gold));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .animate-rise {
+    animation: rise 0.7s var(--ease-out-soft) both;
+  }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes navPole {
+    to { background-position: 45px 45px; }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }
