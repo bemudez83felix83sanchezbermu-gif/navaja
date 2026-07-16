@@ -41,6 +41,18 @@ create policy barbershops_public_read on barbershops
   for select using (true);                            -- directorio público
 create policy barbershops_member_write on barbershops
   for update using (app_is_member(id)) with check (app_is_member(id));
+-- RLS filtra FILAS, no columnas: la política pública expondría también los
+-- datos personales del dueño (owner_name, owner_email, notif_owner_phone).
+-- Privilegios de columna: anon/authenticated solo ven directorio público +
+-- reglas de reserva; owner_* y notif_* se leen únicamente con service_role.
+revoke select on barbershops from anon, authenticated;
+grant select (
+  id, slug, name, tagline, address, phone, timezone,
+  open_days, open_hour, close_hour,
+  slot_step_min, min_notice_min, max_advance_days,
+  auto_confirm, cancel_window_hours, allow_barber_choice, require_email,
+  rating, reviews, created_at
+) on barbershops to anon, authenticated;
 
 -- ---- memberships ----------------------------------------------------------
 create policy memberships_self_read on memberships

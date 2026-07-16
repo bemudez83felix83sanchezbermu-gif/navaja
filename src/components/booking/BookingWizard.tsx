@@ -129,7 +129,7 @@ export function BookingWizard({
     !rules.requireEmail || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim());
   const canContinue =
     (step === 0 && !!serviceId) ||
-    (step === 1 && !!barberId) ||
+    (step === 1 && !!barberId && eligibleBarbers.length > 0) ||
     (step === 2 && !!slotIso) ||
     (step === 3 &&
       form.name.trim().length > 1 &&
@@ -226,7 +226,13 @@ export function BookingWizard({
               {services.map((s) => (
                 <button
                   key={s.id}
-                  onClick={() => setServiceId(s.id)}
+                  onClick={() => {
+                    if (s.id === serviceId) return;
+                    // Barbero y horario dependen del servicio: al cambiarlo dejan de ser válidos.
+                    setServiceId(s.id);
+                    setBarberId(ANY_BARBER);
+                    setSlotIso(null);
+                  }}
                   className={cn(
                     "group rounded-2xl border p-4 text-left transition-all",
                     serviceId === s.id
@@ -278,22 +284,31 @@ export function BookingWizard({
                 : "Te asignamos al primer barbero disponible."
             }
           >
-            <div className="grid gap-3 sm:grid-cols-2">
-              <BarberOption
-                selected={barberId === ANY_BARBER}
-                onClick={() => setBarberId(ANY_BARBER)}
-                any
-              />
-              {rules.allowBarberChoice &&
-                eligibleBarbers.map((b) => (
-                  <BarberOption
-                    key={b.id}
-                    barber={b}
-                    selected={barberId === b.id}
-                    onClick={() => setBarberId(b.id)}
-                  />
-                ))}
-            </div>
+            {eligibleBarbers.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-stone-300 py-10 text-center">
+                <p className="text-sm text-stone-500">
+                  Esta barbería aún no tiene barberos disponibles para este servicio.
+                  Elige otro servicio o vuelve más tarde.
+                </p>
+              </div>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <BarberOption
+                  selected={barberId === ANY_BARBER}
+                  onClick={() => setBarberId(ANY_BARBER)}
+                  any
+                />
+                {rules.allowBarberChoice &&
+                  eligibleBarbers.map((b) => (
+                    <BarberOption
+                      key={b.id}
+                      barber={b}
+                      selected={barberId === b.id}
+                      onClick={() => setBarberId(b.id)}
+                    />
+                  ))}
+              </div>
+            )}
           </Step>
         )}
 
