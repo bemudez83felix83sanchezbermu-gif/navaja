@@ -1,47 +1,54 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { bookingInputSchema } from "@/lib/security/validation";
 import { rateLimit, clientIp } from "@/lib/security/rate-limit";
+import { bookAppointment } from "@/lib/data/queries";
 
 /**
- * Server Action: create a booking.
+ * Server Action: crear una reserva REAL.
  *
- * Why a Server Action (and not just client state):
- *  - It moves the **authoritative** validation and rate limiting to the server,
- *    where the client can't bypass them.
- *  - Next.js Server Actions are POST-only and protected against CSRF by an
- *    automatic Origin/Host check, so we get cross-site request forgery defense
- *    for free.
- *
- * Pipeline: rate-limit (per IP) → validate + anti-bot (Zod) → persist.
- * Never logs PII. Returns a typed, non-leaky result.
+ * Pipeline de confianza (cada capa asume que la anterior falló):
+ *  1. rate-limit por IP — frena abuso/bots insistentes.
+ *  2. Zod estricto — valida, recorta y bloquea honeypot + envíos ultrarrápidos.
+ *  3. RPC `book_appointment` con la llave ANON: el mismo poder que tendría
+ *     cualquier visitante. Postgres re-valida todo (servicio activo, barbero
+ *     apto, horario futuro) y la exclusion constraint elimina el doble booking
+ *     incluso en carrera. La cita y sus notificaciones (WhatsApp al dueño,
+ *     email al cliente) se insertan en la MISMA transacción.
  */
 export type BookResult =
   | { ok: true; confirmationId: string }
   | { ok: false; error: string };
 
 export async function book(raw: unknown): Promise<BookResult> {
-  // 1) Throttle abuse.
   const h = await headers();
-  const ip = clientIp(h);
-  const rl = rateLimit(`book:${ip}`, { limit: 5, windowMs: 60_000 });
+  const rl = rateLimit(`book:${clientIp(h)}`, { limit: 5, windowMs: 60_000 });
   if (!rl.success) {
     return { ok: false, error: `Demasiados intentos. Espera ${rl.retryAfter}s.` };
   }
 
-  // 2) Authoritative validation (also enforces honeypot + min fill time).
   const parsed = bookingInputSchema.safeParse(raw);
   if (!parsed.success) {
-    const msg = parsed.error.issues[0]?.message ?? "Datos inválidos.";
-    return { ok: false, error: msg };
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos." };
   }
+  const d = parsed.data;
 
-  // 3) Persist.
-  //    TODO(Supabase): insert into `appointments` under the shop's RLS policy,
-  //    re-checking slot availability transactionally to avoid double-booking.
-  //    See supabase/policies.sql. For the demo we just acknowledge.
-  const confirmationId = crypto.randomUUID().slice(0, 8).toUpperCase();
+  const res = await bookAppointment({
+    shopId: d.shopId,
+    serviceId: d.serviceId,
+    barberId: d.barberId === "any" ? null : d.barberId,
+    startIso: d.slotIso,
+    name: d.name,
+    phone: d.phone,
+    email: d.email || undefined,
+    notes: d.notes || undefined,
+  });
+  if (!res.ok) return res;
 
-  return { ok: true, confirmationId };
+  // La agenda del dueño muestra la cita nueva sin recargar a mano.
+  revalidatePath("/dashboard", "layout");
+
+  return { ok: true, confirmationId: res.id.slice(0, 8).toUpperCase() };
 }

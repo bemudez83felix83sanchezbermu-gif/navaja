@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   Check,
@@ -14,8 +14,10 @@ import {
   User,
 } from "lucide-react";
 import type { Barber, BookingRules, Service } from "@/lib/data/types";
-import { availability, addDays, startOfDay } from "@/lib/data/mock";
+import type { Slot } from "@/lib/data/queries";
+import { addDays, startOfDay } from "@/lib/dates";
 import { book } from "@/app/actions/book";
+import { getAvailability } from "@/app/actions/availability";
 import { Avatar } from "@/components/ui/Avatar";
 import { Button } from "@/components/ui/Button";
 import {
@@ -27,6 +29,8 @@ import {
 } from "@/lib/utils";
 
 type Props = {
+  shopId: string;
+  shopSlug: string;
   shopName: string;
   openDays: number[];
   services: Service[];
@@ -39,7 +43,15 @@ const STEPS = ["Servicio", "Barbero", "Fecha y hora", "Tus datos"];
 
 const ANY_BARBER = "any";
 
-export function BookingWizard({ shopName, openDays, services, barbers, rules }: Props) {
+export function BookingWizard({
+  shopId,
+  shopSlug,
+  shopName,
+  openDays,
+  services,
+  barbers,
+  rules,
+}: Props) {
   const [step, setStep] = useState(0);
   const [serviceId, setServiceId] = useState<string | null>(null);
   const [barberId, setBarberId] = useState<string>(ANY_BARBER);
@@ -47,7 +59,10 @@ export function BookingWizard({ shopName, openDays, services, barbers, rules }: 
   const [form, setForm] = useState({ name: "", phone: "", email: "", notes: "" });
   // Honeypot (bots fill it) + wizard open time (anti-bot timing). See validation.ts.
   const [company, setCompany] = useState("");
-  const startedAt = useRef(Date.now());
+  const startedAt = useRef<number | null>(null);
+  useEffect(() => {
+    startedAt.current ??= Date.now();
+  }, []);
   const [done, setDone] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -74,13 +89,37 @@ export function BookingWizard({ shopName, openDays, services, barbers, rules }: 
     [serviceId, barbers],
   );
 
-  const slots = useMemo(() => {
-    if (!serviceId) return [];
-    return availability(serviceId, activeDay, barberId, {
-      stepMin: rules.slotStepMin,
-      minNoticeMin: rules.minNoticeMin,
-    });
-  }, [serviceId, activeDay, barberId, rules.slotStepMin, rules.minNoticeMin]);
+  // La disponibilidad se calcula en el SERVIDOR (vista busy_slots, sin PII).
+  // "Cargando" es estado DERIVADO: la clave pedida aún no coincide con la
+  // clave cargada — así el effect solo hace setState al resolver el fetch.
+  const slotsKey = serviceId
+    ? `${serviceId}|${barberId}|${activeDay.toISOString()}`
+    : "";
+  const [loaded, setLoaded] = useState<{ key: string; slots: Slot[] }>({
+    key: "",
+    slots: [],
+  });
+  const slotsLoading = slotsKey !== "" && loaded.key !== slotsKey;
+  const slots = loaded.key === slotsKey ? loaded.slots : [];
+  useEffect(() => {
+    if (!slotsKey || !serviceId) return;
+    let alive = true;
+    getAvailability({
+      shopSlug,
+      serviceId,
+      barberId,
+      dateIso: activeDay.toISOString(),
+    })
+      .then((res) => {
+        if (alive) setLoaded({ key: slotsKey, slots: res.ok ? res.slots : [] });
+      })
+      .catch(() => {
+        if (alive) setLoaded({ key: slotsKey, slots: [] });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [slotsKey, shopSlug, serviceId, activeDay, barberId]);
 
   const slot = slotIso ? new Date(slotIso) : null;
   const chosenBarber =
@@ -108,6 +147,7 @@ export function BookingWizard({ shopName, openDays, services, barbers, rules }: 
     setSubmitting(true);
     try {
       const res = await book({
+        shopId,
         serviceId,
         barberId,
         slotIso,
@@ -116,7 +156,7 @@ export function BookingWizard({ shopName, openDays, services, barbers, rules }: 
         email: form.email,
         notes: form.notes,
         company,
-        startedAt: startedAt.current,
+        startedAt: startedAt.current ?? Date.now(),
       });
       if (res.ok) {
         setConfirmationId(res.confirmationId);
@@ -288,7 +328,16 @@ export function BookingWizard({ shopName, openDays, services, barbers, rules }: 
             <p className="mt-5 mb-2 text-sm font-medium capitalize text-stone-500">
               {formatDayLong(activeDay)}
             </p>
-            {slots.some((s) => s.available) ? (
+            {slotsLoading ? (
+              <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+                {Array.from({ length: 12 }).map((_, i) => (
+                  <span
+                    key={i}
+                    className="h-10 animate-pulse rounded-xl bg-stone-100"
+                  />
+                ))}
+              </div>
+            ) : slots.some((s) => s.available) ? (
               <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
                 {slots.map((s) => (
                   <button
@@ -354,6 +403,23 @@ export function BookingWizard({ shopName, openDays, services, barbers, rules }: 
                   autoComplete="email"
                 />
               </Field>
+
+              {/* Aviso de privacidad (LFPDPPP): el cliente final debe saber
+                  quién trata sus datos y para qué ANTES de enviarlos. El
+                  proxy sirve /legal también en dominios de tenant. */}
+              <p className="text-xs leading-relaxed text-stone-500">
+                Usamos tus datos solo para gestionar tu cita y enviarte
+                recordatorios. Al confirmar aceptas el{" "}
+                <a
+                  href="/legal/privacidad"
+                  target="_blank"
+                  rel="noopener"
+                  className="font-medium text-stone-600 underline underline-offset-2 hover:text-ink"
+                >
+                  Aviso de Privacidad
+                </a>
+                .
+              </p>
 
               {/* Honeypot — hidden from humans & a11y tree; only bots fill it. */}
               <div aria-hidden className="absolute left-[-9999px] top-0 h-0 w-0 overflow-hidden">

@@ -1,27 +1,40 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { MapPin, Star, Clock } from "lucide-react";
-import { SHOP, SERVICES, BARBERS } from "@/lib/data/mock";
-import { getBookingRules } from "@/lib/data/store";
+import {
+  getBarbers,
+  getBookingRules,
+  getServices,
+  getShopBySlug,
+} from "@/lib/data/queries";
 import { Logo } from "@/components/brand/Logo";
 import { BarberPole } from "@/components/brand/BarberPole";
 import { BookingWizard } from "@/components/booking/BookingWizard";
 
-export function generateMetadata() {
+type Params = { params: Promise<{ shop: string }> };
+
+export async function generateMetadata({ params }: Params) {
+  const { shop } = await params;
+  const s = await getShopBySlug(shop);
+  if (!s) return { title: "Barbería no encontrada" };
   return {
-    title: `Reservar en ${SHOP.name}`,
-    description: `Agenda tu cita en ${SHOP.name} en 30 segundos.`,
+    title: `Reservar en ${s.name}`,
+    description: `Agenda tu cita en ${s.name} en 30 segundos.`,
   };
 }
 
-export default async function BookingPage({
-  params,
-}: {
-  params: Promise<{ shop: string }>;
-}) {
-  // Tenant resolution: only known shop slugs render; everything else 404s.
-  const { shop } = await params;
-  if (shop !== SHOP.slug) notFound();
+export default async function BookingPage({ params }: Params) {
+  // Resolución de tenant: slugs desconocidos → 404. Los datos vienen de la DB
+  // con RLS de lectura pública (solo servicios y barberos activos).
+  const { shop: slug } = await params;
+  const shop = await getShopBySlug(slug);
+  if (!shop) notFound();
+
+  const [services, barbers, rules] = await Promise.all([
+    getServices({ slug }),
+    getBarbers({ slug }),
+    getBookingRules(slug),
+  ]);
 
   return (
     <div className="min-h-dvh bg-cream">
@@ -34,7 +47,7 @@ export default async function BookingPage({
               <Logo tone="light" />
             </Link>
             <a
-              href={`tel:${SHOP.phone.replace(/\s/g, "")}`}
+              href={`tel:${shop.phone.replace(/\s/g, "")}`}
               className="rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-stone-200 backdrop-blur transition-colors hover:bg-white/10"
             >
               Llamar
@@ -43,21 +56,21 @@ export default async function BookingPage({
 
           <div className="mt-8 pb-8">
             <h1 className="font-display text-4xl font-semibold tracking-tight sm:text-5xl">
-              {SHOP.name}
+              {shop.name}
             </h1>
-            <p className="mt-2 text-stone-300">{SHOP.tagline}</p>
+            <p className="mt-2 text-stone-300">{shop.tagline}</p>
             <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-stone-300">
               <span className="inline-flex items-center gap-1.5">
                 <Star className="h-4 w-4 fill-gold-400 text-gold-400" />
-                <span className="font-semibold text-white">{SHOP.rating}</span>
-                <span className="text-stone-400">({SHOP.reviews} reseñas)</span>
+                <span className="font-semibold text-white">{shop.rating}</span>
+                <span className="text-stone-400">({shop.reviews} reseñas)</span>
               </span>
               <span className="inline-flex items-center gap-1.5">
-                <MapPin className="h-4 w-4 text-gold-400" /> {SHOP.address}
+                <MapPin className="h-4 w-4 text-gold-400" /> {shop.address}
               </span>
               <span className="inline-flex items-center gap-1.5">
-                <Clock className="h-4 w-4 text-gold-400" /> Lun–Sáb · {SHOP.openHour}:00–
-                {SHOP.closeHour}:00
+                <Clock className="h-4 w-4 text-gold-400" /> Lun–Sáb · {shop.openHour}:00–
+                {shop.closeHour}:00
               </span>
             </div>
           </div>
@@ -69,11 +82,13 @@ export default async function BookingPage({
       <main className="mx-auto max-w-5xl px-5 py-10 sm:px-8 sm:py-14">
         <div className="rounded-3xl border border-stone-200 bg-white p-6 shadow-[var(--shadow-card)] sm:p-10">
           <BookingWizard
-            shopName={SHOP.name}
-            openDays={SHOP.openDays}
-            services={SERVICES}
-            barbers={BARBERS}
-            rules={getBookingRules()}
+            shopId={shop.id}
+            shopSlug={shop.slug}
+            shopName={shop.name}
+            openDays={shop.openDays}
+            services={services}
+            barbers={barbers}
+            rules={rules}
           />
         </div>
         <p className="mt-6 text-center text-xs text-stone-400">

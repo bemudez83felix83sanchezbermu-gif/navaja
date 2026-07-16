@@ -32,6 +32,9 @@ export interface Barbershop {
   closeHour: number; // 24h
   rating: number;
   reviews: number;
+  /** Dueño mostrado en Configuración → Equipo (hasta que exista auth real). */
+  ownerName?: string;
+  ownerEmail?: string;
 }
 
 export interface Barber {
@@ -58,6 +61,8 @@ export interface Service {
   /** price in cents (MXN) */
   priceCents: number;
   popular?: boolean;
+  /** inactivo = oculto en la página pública, conserva su historial */
+  active: boolean;
 }
 
 export interface Client {
@@ -128,6 +133,22 @@ export interface NotificationSettings {
   ownerNewBookingEmail: boolean;
   /** sender name clients see in messages */
   senderName: string;
+  /** WhatsApp del dueño al que llegan las reservas nuevas ("" = sin configurar) */
+  ownerPhone: string;
+}
+
+/** Fila de notifications_log — el pipeline de avisos salientes. */
+export interface NotificationEntry {
+  id: UUID;
+  barbershopId: UUID;
+  appointmentId?: UUID;
+  channel: "whatsapp" | "email" | "sms";
+  audience: "dueno" | "cliente";
+  recipient: string;
+  subject: string;
+  body?: string;
+  status: "pendiente_envio" | "enviado" | "error";
+  createdAt: string; // ISO
 }
 
 export type DomainStatus =

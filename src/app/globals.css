@@ -59,6 +59,53 @@
 }
 
 /* ============================================================
+   Modo oscuro del dashboard
+   ------------------------------------------------------------
+   Los componentes no cambian: dentro de `.theme-scope` (el <main> del
+   dashboard) se REDEFINEN los tokens cuando <html data-theme="dark">.
+   La escala stone se invierte (50 ↔ 950), así los "bg claros" se vuelven
+   superficies oscuras y los "bg oscuros" (botones dark, tiles) se vuelven
+   claros; `--color-white` pasa a ser la superficie elevada y `--color-ink`
+   el texto claro. Landing, página pública y sidebar conservan su identidad.
+   ============================================================ */
+[data-theme="dark"] .theme-scope {
+  --color-cream: #100f0d;          /* fondo app */
+  --color-card: #1b1917;           /* superficies elevadas */
+  --color-white: #1b1917;          /* lo que era blanco ahora es superficie */
+  --color-ink: #f4f2ee;            /* texto principal */
+  --color-muted: #232019;
+  --color-muted-foreground: #a8a196;
+  --color-border: #2e2b27;
+
+  /* escala stone invertida dentro del dashboard */
+  --color-stone-50: #201d1a;
+  --color-stone-100: #262320;
+  --color-stone-200: #343029;
+  --color-stone-300: #474239;
+  --color-stone-400: #8f887f;
+  --color-stone-500: #a49d92;
+  --color-stone-600: #c2bbaf;
+  --color-stone-700: #d8d2c7;
+  --color-stone-800: #eae5dc;
+  --color-stone-900: #f2eee7;
+  --color-stone-950: #faf8f4;
+
+  /* estados legibles sobre oscuro */
+  --color-success: #34d399;
+  --color-success-bg: #0b2e23;
+  --color-warning: #fbbf24;
+  --color-warning-bg: #33260c;
+  --color-destructive: #f87171;
+  --color-destructive-bg: #3a1515;
+  --color-info: #38bdf8;
+
+  --color-gold-400: #caa25a;
+
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4), 0 4px 16px rgb(0 0 0 / 0.35);
+  --shadow-lift: 0 8px 30px rgb(0 0 0 / 0.55);
+}
+
+/* ============================================================
    Base
    ============================================================ */
 @layer base {
@@ -156,6 +203,45 @@
   }
   @keyframes navPole {
     to { background-position: 45px 45px; }
+  }
+
+  /* ---- Overlays (modal / drawer) ---- */
+  .animate-fade-in {
+    animation: fadeIn 0.2s ease-out both;
+  }
+  .animate-drawer-in {
+    animation: drawerIn 0.32s var(--ease-out-soft) both;
+  }
+  .animate-pop-in {
+    animation: popIn 0.25s var(--ease-out-soft) both;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes drawerIn {
+    from { transform: translateX(100%); }
+    to { transform: translateX(0); }
+  }
+  @keyframes popIn {
+    from { opacity: 0; transform: translateY(12px) scale(0.98); }
+    to { opacity: 1; transform: none; }
+  }
+
+  /* ---- Calendario: deslizamiento direccional al cambiar de mes ---- */
+  .animate-cal-next {
+    animation: calNext 0.28s var(--ease-out-soft) both;
+  }
+  .animate-cal-prev {
+    animation: calPrev 0.28s var(--ease-out-soft) both;
+  }
+  @keyframes calNext {
+    from { opacity: 0; transform: translateX(28px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes calPrev {
+    from { opacity: 0; transform: translateX(-28px); }
+    to { opacity: 1; transform: none; }
   }
 }
 

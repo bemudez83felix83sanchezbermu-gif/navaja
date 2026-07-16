@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import { Inter, Playfair_Display, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -47,12 +48,19 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  // Tema del dashboard (claro/oscuro) desde cookie: el atributo llega ya
+  // pintado desde el servidor — sin flash. Como todo es force-dynamic por la
+  // CSP con nonce, leer cookies aquí no cambia nada del modelo de render.
+  const theme =
+    (await cookies()).get("navaja-theme")?.value === "dark" ? "dark" : "light";
+
   return (
     <html
       lang="es"
+      data-theme={theme}
       className={`${inter.variable} ${playfair.variable} ${jetbrains.variable} h-full antialiased`}
     >
       <body className="min-h-full">{children}</body>

@@ -32,12 +32,12 @@ export function SiteNav() {
 
         <div className="flex items-center gap-2">
           <Link
-            href="/dashboard"
+            href="/login"
             className="hidden rounded-full px-4 py-2 text-sm font-medium text-stone-300 transition-colors hover:text-white sm:block"
           >
             Entrar
           </Link>
-          <ButtonLink href="/dashboard" size="sm" className="rounded-full">
+          <ButtonLink href="/registro" size="sm" className="rounded-full">
             Empezar gratis
           </ButtonLink>
         </div>

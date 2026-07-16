@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  BarChart3,
   CalendarDays,
   ChevronsUpDown,
   LayoutDashboard,
@@ -15,20 +16,32 @@ import {
   Users,
   X,
   ExternalLink,
+  LogOut,
 } from "lucide-react";
+import { logout } from "@/app/actions/auth";
 import { Logo } from "@/components/brand/Logo";
 import { Avatar } from "@/components/ui/Avatar";
+import { ThemeToggle } from "@/components/dashboard/ThemeToggle";
 import { cn } from "@/lib/utils";
 
 const NAV = [
   { href: "/dashboard", label: "Resumen", icon: LayoutDashboard },
   { href: "/dashboard/agenda", label: "Agenda", icon: CalendarDays },
   { href: "/dashboard/citas", label: "Citas", icon: ListChecks },
+  { href: "/dashboard/reportes", label: "Reportes", icon: BarChart3 },
   { href: "/dashboard/servicios", label: "Servicios", icon: Scissors },
   { href: "/dashboard/barberos", label: "Barberos", icon: Users },
   { href: "/dashboard/clientes", label: "Clientes", icon: UserRound },
   { href: "/dashboard/configuracion", label: "Configuración", icon: Settings },
 ];
+
+type ShopProps = {
+  shopName: string;
+  shopArea: string;
+  ownerName: string;
+  slug: string;
+  initialTheme: "light" | "dark";
+};
 
 function NavList({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
@@ -66,7 +79,7 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
-function Panel({ onNavigate }: { onNavigate?: () => void }) {
+function Panel({ shop, onNavigate }: { shop: ShopProps; onNavigate?: () => void }) {
   return (
     <div className="flex h-full flex-col gap-6 p-5">
       <div className="px-1">
@@ -77,13 +90,13 @@ function Panel({ onNavigate }: { onNavigate?: () => void }) {
 
       <button className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-left transition-colors hover:bg-white/[0.06]">
         <span className="grid h-8 w-8 place-items-center rounded-lg bg-gold font-display text-sm font-bold text-white">
-          F
+          {shop.shopName.replace(/^Barbería\s+/i, "").charAt(0) || "N"}
         </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm font-semibold text-white">
-            Barbería El Filo
+            {shop.shopName}
           </span>
-          <span className="block truncate text-xs text-stone-500">Roma Norte</span>
+          <span className="block truncate text-xs text-stone-500">{shop.shopArea}</span>
         </span>
         <ChevronsUpDown className="h-4 w-4 text-stone-500" />
       </button>
@@ -96,34 +109,45 @@ function Panel({ onNavigate }: { onNavigate?: () => void }) {
       </div>
 
       <div className="space-y-3">
+        <ThemeToggle initialTheme={shop.initialTheme} />
         <Link
-          href="/el-filo"
+          href={`/${shop.slug}`}
           className="flex items-center justify-center gap-2 rounded-xl border border-gold/30 bg-gold/10 px-3 py-2.5 text-sm font-semibold text-gold-300 transition-colors hover:bg-gold/15"
         >
           <ExternalLink className="h-4 w-4" />
           Ver página de reservas
         </Link>
         <div className="flex items-center gap-3 rounded-xl border border-white/10 px-3 py-2.5">
-          <Avatar name="Marco Salinas" accent="#a16207" size={34} />
+          <Avatar name={shop.ownerName} accent="#a16207" size={34} />
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-semibold text-white">
-              Marco Salinas
+              {shop.ownerName}
             </span>
             <span className="block truncate text-xs text-stone-500">Dueño</span>
           </span>
+          <form action={logout}>
+            <button
+              type="submit"
+              title="Cerrar sesión"
+              aria-label="Cerrar sesión"
+              className="grid h-8 w-8 place-items-center rounded-lg text-stone-500 transition-colors hover:bg-white/10 hover:text-white"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </form>
         </div>
       </div>
     </div>
   );
 }
 
-export function Sidebar() {
+export function Sidebar(props: ShopProps) {
   const [open, setOpen] = useState(false);
   return (
     <>
       {/* Desktop */}
       <aside className="sticky top-0 hidden h-dvh w-[16.5rem] shrink-0 bg-stone-950 lg:block">
-        <Panel />
+        <Panel shop={props} />
       </aside>
 
       {/* Mobile top bar */}
@@ -153,7 +177,7 @@ export function Sidebar() {
             >
               <X className="h-5 w-5" />
             </button>
-            <Panel onNavigate={() => setOpen(false)} />
+            <Panel shop={props} onNavigate={() => setOpen(false)} />
           </div>
         </div>
       )}

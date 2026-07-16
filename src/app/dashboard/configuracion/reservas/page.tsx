@@ -1,6 +1,6 @@
-import { getBookingRules } from "@/lib/data/store";
+import { getBookingRules } from "@/lib/data/queries";
 import { BookingRulesForm } from "@/components/settings/BookingRulesForm";
 
-export default function ReservasPage() {
-  return <BookingRulesForm rules={{ ...getBookingRules() }} />;
+export default async function ReservasPage() {
+  return <BookingRulesForm rules={await getBookingRules()} />;
 }

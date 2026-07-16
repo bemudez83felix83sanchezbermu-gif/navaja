@@ -6,10 +6,11 @@ const cols = [
   {
     title: "Producto",
     links: [
-      { label: "Funciones", href: "#funciones" },
-      { label: "Precios", href: "#precios" },
+      { label: "Funciones", href: "/#funciones" },
+      { label: "Precios", href: "/#precios" },
       { label: "Demo de reserva", href: "/el-filo" },
-      { label: "Panel demo", href: "/dashboard" },
+      { label: "Crear cuenta", href: "/registro" },
+      { label: "Iniciar sesión", href: "/login" },
     ],
   },
   {
@@ -23,8 +24,8 @@ const cols = [
   {
     title: "Legal",
     links: [
-      { label: "Privacidad", href: "#" },
-      { label: "Términos", href: "#" },
+      { label: "Aviso de Privacidad", href: "/legal/privacidad" },
+      { label: "Términos y Condiciones", href: "/legal/terminos" },
     ],
   },
 ];

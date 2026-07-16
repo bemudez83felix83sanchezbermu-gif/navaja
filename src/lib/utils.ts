@@ -42,6 +42,10 @@ export const formatTime = (d: Date) =>
     hour12: false,
   }).format(d);
 
+/** Días transcurridos (mínimo 1) desde una fecha ISO. */
+export const daysSince = (iso: string) =>
+  Math.max(1, Math.round((Date.now() - new Date(iso).getTime()) / 86400000));
+
 export const initials = (name: string) =>
   name
     .split(" ")

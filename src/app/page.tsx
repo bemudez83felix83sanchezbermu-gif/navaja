@@ -66,7 +66,7 @@ function Hero() {
           </p>
 
           <div className="mt-9 flex flex-col gap-3 sm:flex-row">
-            <ButtonLink href="/dashboard" size="lg" className="rounded-full">
+            <ButtonLink href="/registro" size="lg" className="rounded-full">
               Crear mi barbería
               <ArrowRight className="h-4 w-4" />
             </ButtonLink>
@@ -343,7 +343,7 @@ function Pricing() {
                 ))}
               </ul>
               <ButtonLink
-                href="/dashboard"
+                href="/registro"
                 className={`mt-7 w-full rounded-full ${
                   p.highlight ? "" : "bg-white/10 text-white shadow-none hover:bg-white/15"
                 }`}
@@ -377,7 +377,7 @@ function FinalCTA() {
             14 días.
           </p>
           <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
-            <ButtonLink href="/dashboard" size="lg" className="rounded-full">
+            <ButtonLink href="/registro" size="lg" className="rounded-full">
               Crear mi barbería
               <ArrowRight className="h-4 w-4" />
             </ButtonLink>

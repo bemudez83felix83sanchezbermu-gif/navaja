@@ -34,6 +34,7 @@ alter table appointments   enable row level security;
 alter table domains        enable row level security;
 alter table invitations    enable row level security;
 alter table subscriptions  enable row level security;
+alter table notifications_log enable row level security;
 
 -- ---- barbershops ----------------------------------------------------------
 create policy barbershops_public_read on barbershops
@@ -93,11 +94,16 @@ create policy subscriptions_member_read on subscriptions
   for select using (app_is_member(barbershop_id));
 -- upgrades/downgrades pasan por el webhook de billing con service_role.
 
+-- ---- notifications_log (contiene teléfonos/emails — SOLO miembros) ---------
+create policy notifications_member_all on notifications_log
+  for all using (app_is_member(barbershop_id)) with check (app_is_member(barbershop_id));
+
 -- Defensa en profundidad: revoca privilegios de tabla a anon en datos sensibles.
 revoke all on clients       from anon;
 revoke all on appointments  from anon;
 revoke all on invitations   from anon;
 revoke all on subscriptions from anon;
+revoke all on notifications_log from anon;
 
 -- ---- Vista pública de horarios ocupados (sin PII) -------------------------
 -- Expone SOLO barbero + rango horario para que el cliente calcule disponibilidad.
@@ -125,6 +131,7 @@ create or replace function book_appointment(
 language plpgsql security definer set search_path = public, pg_temp as $$
 declare
   v_dur int; v_price int; v_end timestamptz; v_barber uuid; v_client uuid; v_appt uuid;
+  v_shop record; v_svc_name text; v_barber_name text; v_when text;
 begin
   -- 0) Saneo básico (el app valida también; esto es belt-and-suspenders).
   if char_length(coalesce(p_name,'')) not between 2 and 80 then
@@ -134,10 +141,13 @@ begin
   if p_start <= now() then raise exception 'El horario ya pasó'; end if;
 
   -- 1) Servicio válido y de esta barbería.
-  select duration_min, price_cents into v_dur, v_price
+  select duration_min, price_cents, name into v_dur, v_price, v_svc_name
   from services where id = p_service and barbershop_id = p_shop and active;
   if v_dur is null then raise exception 'Servicio inválido'; end if;
   v_end := p_start + make_interval(mins => v_dur);
+
+  select * into v_shop from barbershops where id = p_shop;
+  if not found then raise exception 'Barbería inválida'; end if;
 
   -- 2) Elegir barbero (el indicado, o el primero libre que haga el servicio).
   if p_barber is not null then
@@ -168,11 +178,39 @@ begin
   returning id into v_client;
 
   -- 4) Crear la cita (la exclusion constraint bloquea el doble booking en carrera).
+  --    auto_confirm (regla de reserva del dueño) decide el estado inicial.
   insert into appointments
     (barbershop_id, barber_id, service_id, client_id, starts_at, ends_at, status, price_cents, notes)
   values
-    (p_shop, v_barber, p_service, v_client, p_start, v_end, 'pendiente', v_price, nullif(p_notes,''))
+    (p_shop, v_barber, p_service, v_client, p_start, v_end,
+     case when v_shop.auto_confirm then 'confirmada'::appointment_status
+          else 'pendiente'::appointment_status end,
+     v_price, nullif(p_notes,''))
   returning id into v_appt;
+
+  -- 5) Registrar notificaciones salientes (mismo commit que la cita).
+  select name into v_barber_name from barbers where id = v_barber;
+  v_when := to_char(p_start at time zone v_shop.timezone, 'DD/MM/YYYY HH24:MI');
+
+  if v_shop.notif_owner_new_booking and coalesce(v_shop.notif_owner_phone,'') <> '' then
+    insert into notifications_log
+      (barbershop_id, appointment_id, channel, audience, recipient, subject, body)
+    values
+      (p_shop, v_appt, 'whatsapp', 'dueno', v_shop.notif_owner_phone,
+       'Nueva reserva: ' || p_name,
+       p_name || ' reservó ' || v_svc_name || ' con ' || v_barber_name ||
+       ' el ' || v_when || '. Tel: ' || p_phone);
+  end if;
+
+  if v_shop.notif_confirmation_email and coalesce(p_email,'') <> '' then
+    insert into notifications_log
+      (barbershop_id, appointment_id, channel, audience, recipient, subject, body)
+    values
+      (p_shop, v_appt, 'email', 'cliente', p_email,
+       'Tu reserva en ' || v_shop.name,
+       'Hola ' || p_name || ', tu cita de ' || v_svc_name || ' con ' || v_barber_name ||
+       ' quedó agendada para el ' || v_when || '.');
+  end if;
 
   return v_appt;
 exception

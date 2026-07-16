@@ -8,14 +8,13 @@ import {
   Clock,
 } from "lucide-react";
 import {
-  SHOP,
-  BARBERS,
-  appointmentsOn,
   appointmentsInRange,
+  appointmentsOn,
+  getBarbers,
+  getShop,
   kpisForToday,
-  startOfDay,
-  addDays,
-} from "@/lib/data/mock";
+} from "@/lib/data/queries";
+import { addDays, startOfDay } from "@/lib/dates";
 import { PageShell, PageHeader } from "@/components/dashboard/PageHeader";
 import { KpiCard } from "@/components/dashboard/KpiCard";
 import { AppointmentRow } from "@/components/dashboard/AppointmentRow";
@@ -24,22 +23,29 @@ import { ButtonLink } from "@/components/ui/Button";
 import { Avatar } from "@/components/ui/Avatar";
 import { formatPrice } from "@/lib/utils";
 
-export default function OverviewPage() {
+export default async function OverviewPage() {
   const now = new Date();
   const today = startOfDay(now);
-  const todays = appointmentsOn(today);
-  const kpis = kpisForToday();
+
+  const [shop, barbers, todays, kpis, nextDays] = await Promise.all([
+    getShop(),
+    getBarbers(),
+    appointmentsOn(today),
+    kpisForToday(),
+    appointmentsInRange(now, addDays(today, 8)),
+  ]);
 
   const hour = now.getHours();
   const greeting = hour < 12 ? "Buenos días" : hour < 19 ? "Buenas tardes" : "Buenas noches";
+  const ownerFirstName = (shop.ownerName ?? "").split(" ")[0] || "crack";
 
-  // next upcoming (today + following open days), max 5
-  const upcoming = appointmentsInRange(now, addDays(today, 8))
+  // próximas citas (hoy + días siguientes), máx 5
+  const upcoming = nextDays
     .filter((a) => a.status === "confirmada" || a.status === "pendiente")
     .slice(0, 5);
 
-  const workMin = (SHOP.closeHour - SHOP.openHour) * 60;
-  const team = BARBERS.filter((b) => b.active).map((b) => {
+  const workMin = (shop.closeHour - shop.openHour) * 60;
+  const team = barbers.map((b) => {
     const list = todays.filter(
       (a) => a.barberId === b.id && a.status !== "cancelada",
     );
@@ -53,10 +59,10 @@ export default function OverviewPage() {
   return (
     <PageShell>
       <PageHeader
-        title={`${greeting}, Marco`}
-        subtitle={`Esto es lo que tienes hoy en ${SHOP.name}.`}
+        title={`${greeting}, ${ownerFirstName}`}
+        subtitle={`Esto es lo que tienes hoy en ${shop.name}.`}
         actions={
-          <ButtonLink href="/el-filo" size="md">
+          <ButtonLink href={`/${shop.slug}`} size="md">
             <Plus className="h-4 w-4" />
             Nueva cita
           </ButtonLink>
@@ -114,7 +120,7 @@ export default function OverviewPage() {
             {todays.length > 0 ? (
               todays.map((a) => <AppointmentRow key={a.id} appt={a} />)
             ) : (
-              <EmptyDay />
+              <EmptyDay slug={shop.slug} />
             )}
           </div>
         </Card>
@@ -173,7 +179,7 @@ export default function OverviewPage() {
   );
 }
 
-function EmptyDay() {
+function EmptyDay({ slug }: { slug: string }) {
   return (
     <div className="flex flex-col items-center px-4 py-14 text-center">
       <span className="grid h-12 w-12 place-items-center rounded-2xl bg-stone-100 text-stone-400">
@@ -183,7 +189,7 @@ function EmptyDay() {
       <p className="mt-1 text-sm text-stone-500">
         Comparte tu página de reservas para empezar a llenar la agenda.
       </p>
-      <ButtonLink href="/el-filo" variant="outline" size="sm" className="mt-4">
+      <ButtonLink href={`/${slug}`} variant="outline" size="sm" className="mt-4">
         Ver página de reservas
       </ButtonLink>
     </div>

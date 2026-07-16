@@ -52,6 +52,14 @@ create table if not exists barbershops (
   notif_whatsapp           boolean not null default false,
   notif_owner_new_booking  boolean not null default true,
   notif_sender_name        text,
+  -- Teléfono (WhatsApp) del dueño al que llegan las reservas nuevas
+  notif_owner_phone        text check (notif_owner_phone ~ '^\+?[0-9 ]{8,20}$'),
+  -- Dueño mostrado en /configuracion/equipo hasta que exista auth real
+  owner_name  text,
+  owner_email text,
+  -- Prueba social mostrada en la página pública
+  rating      numeric(2,1) not null default 5.0 check (rating between 0 and 5),
+  reviews     int not null default 0 check (reviews >= 0),
   created_at  timestamptz not null default now()
 );
 
@@ -118,6 +126,7 @@ create table if not exists barbers (
   bio            text,
   specialties    text[] not null default '{}',
   accent         text,
+  rating         numeric(2,1) not null default 5.0 check (rating between 0 and 5),
   active         boolean not null default true,
   created_at     timestamptz not null default now()
 );
@@ -176,6 +185,26 @@ create table if not exists appointments (
   ) where (status in ('pendiente','confirmada','completada'))
 );
 
+-- ---- Registro de notificaciones salientes ----------------------------------
+-- Cada evento que debería avisarse (nueva reserva → WhatsApp del dueño,
+-- confirmación → email del cliente) se registra aquí con status
+-- 'pendiente_envio'. Un worker/edge function con proveedor real (Twilio /
+-- WhatsApp Cloud API / Resend) los consumirá después; la app ya deja el
+-- pipeline listo y el dashboard puede listarlos.
+create table if not exists notifications_log (
+  id             uuid primary key default gen_random_uuid(),
+  barbershop_id  uuid not null references barbershops(id) on delete cascade,
+  appointment_id uuid references appointments(id) on delete set null,
+  channel        text not null check (channel in ('whatsapp','email','sms')),
+  audience       text not null check (audience in ('dueno','cliente')),
+  recipient      text not null,   -- teléfono o email según canal
+  subject        text not null,
+  body           text,
+  status         text not null default 'pendiente_envio'
+                 check (status in ('pendiente_envio','enviado','error')),
+  created_at     timestamptz not null default now()
+);
+
 -- ---- Indexes --------------------------------------------------------------
 create index if not exists idx_barbers_shop      on barbers(barbershop_id);
 create index if not exists idx_services_shop     on services(barbershop_id);
@@ -185,3 +214,4 @@ create index if not exists idx_appts_barber_time on appointments(barber_id, star
 create index if not exists idx_memberships_user  on memberships(user_id);
 create index if not exists idx_domains_shop      on domains(barbershop_id);
 create index if not exists idx_invitations_shop  on invitations(barbershop_id);
+create index if not exists idx_notif_shop_time   on notifications_log(barbershop_id, created_at desc);

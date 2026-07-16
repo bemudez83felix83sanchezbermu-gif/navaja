@@ -1,6 +1,6 @@
-import { getMembers } from "@/lib/data/store";
+import { getMembers } from "@/lib/data/queries";
 import { TeamPanel } from "@/components/settings/TeamPanel";
 
-export default function EquipoPage() {
-  return <TeamPanel members={getMembers().map((m) => ({ ...m }))} />;
+export default async function EquipoPage() {
+  return <TeamPanel members={await getMembers()} />;
 }

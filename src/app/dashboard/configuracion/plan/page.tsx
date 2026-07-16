@@ -1,24 +1,33 @@
-import { BARBERS, appointmentsInRange, startOfDay } from "@/lib/data/mock";
-import { PLANS, getInvoices, getSubscription } from "@/lib/data/store";
+import {
+  appointmentsInRange,
+  getBarbers,
+  getInvoices,
+  getSubscription,
+} from "@/lib/data/queries";
+import { PLANS } from "@/lib/data/plans";
 import { PlanPanel } from "@/components/settings/PlanPanel";
 
-export default function PlanPage() {
+export default async function PlanPage() {
   const now = new Date();
-  const monthStart = startOfDay(new Date(now.getFullYear(), now.getMonth(), 1));
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-  const appointmentsThisMonth = appointmentsInRange(monthStart, nextMonth).filter(
-    (a) => a.status !== "cancelada",
-  ).length;
+
+  const [subscription, invoices, barbers, monthAppts] = await Promise.all([
+    getSubscription(),
+    getInvoices(),
+    getBarbers(),
+    appointmentsInRange(monthStart, nextMonth),
+  ]);
 
   return (
     <PlanPanel
       plans={PLANS}
-      subscription={{ ...getSubscription() }}
+      subscription={subscription}
       usage={{
-        barbers: BARBERS.filter((b) => b.active).length,
-        appointmentsThisMonth,
+        barbers: barbers.length,
+        appointmentsThisMonth: monthAppts.filter((a) => a.status !== "cancelada").length,
       }}
-      invoices={getInvoices().map((i) => ({ ...i }))}
+      invoices={invoices}
     />
   );
 }

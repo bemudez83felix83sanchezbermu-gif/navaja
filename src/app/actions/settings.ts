@@ -6,6 +6,7 @@ import { z } from "zod";
 import { rateLimit, clientIp } from "@/lib/security/rate-limit";
 import {
   bookingRulesSchema,
+  entityIdSchema,
   hostnameSchema,
   inviteMemberSchema,
   notificationsSchema,
@@ -13,18 +14,17 @@ import {
   RESERVED_SLUGS,
   shopProfileSchema,
   slugSchema,
-  storeIdSchema,
 } from "@/lib/security/validation";
-import * as store from "@/lib/data/store";
+import * as db from "@/lib/data/queries";
 import { ROOT_DOMAIN } from "@/lib/tenant";
 
 /**
- * Server Actions for the self-service settings panel.
+ * Server Actions del panel de auto-servicio — ahora contra Supabase.
  *
- * Same trust pipeline as booking: rate-limit (per IP) → Zod (strict) → mutate.
- * In production every mutation additionally runs under the session's RLS
- * membership (see supabase/policies.sql) — the mock store stands in for that.
- * Results are typed and never leak internals.
+ * Mismo pipeline de confianza que la reserva: rate-limit (IP) → Zod (estricto)
+ * → mutación con service_role acotada al tenant del dashboard. Cuando llegue
+ * auth, el service_role se sustituye por la sesión del usuario y las políticas
+ * RLS de `supabase/policies.sql` hacen el mismo trabajo en la base.
  */
 export type ActionResult = { ok: true; message?: string } | { ok: false; error: string };
 
@@ -41,7 +41,13 @@ function fail(err: z.ZodError): ActionResult {
   return { ok: false, error: err.issues[0]?.message ?? "Datos inválidos." };
 }
 
-/** Refresh every surface that renders shop data (dashboard + public booking). */
+/** Mensajes de dominio (español, pensados para el dueño) pasan; internals no. */
+function errMsg(e: unknown): string {
+  const m = e instanceof Error ? e.message : "";
+  return m && !m.startsWith("[db:") ? m : "Algo salió mal. Inténtalo de nuevo.";
+}
+
+/** Refresca todas las superficies que pintan datos de la barbería. */
 function refresh() {
   revalidatePath("/", "layout");
 }
@@ -54,7 +60,11 @@ export async function updateProfile(raw: unknown): Promise<ActionResult> {
   const parsed = shopProfileSchema.safeParse(raw);
   if (!parsed.success) return fail(parsed.error);
 
-  store.updateShopProfile(parsed.data);
+  try {
+    await db.updateShopProfile(parsed.data);
+  } catch (e) {
+    return { ok: false, error: errMsg(e) };
+  }
   refresh();
   return { ok: true, message: "Datos del negocio guardados." };
 }
@@ -67,7 +77,11 @@ export async function updateBookingRules(raw: unknown): Promise<ActionResult> {
   const parsed = bookingRulesSchema.safeParse(raw);
   if (!parsed.success) return fail(parsed.error);
 
-  store.updateBookingRules(parsed.data);
+  try {
+    await db.updateBookingRules(parsed.data);
+  } catch (e) {
+    return { ok: false, error: errMsg(e) };
+  }
   refresh();
   return { ok: true, message: "Reglas de reserva actualizadas." };
 }
@@ -80,7 +94,11 @@ export async function updateNotifications(raw: unknown): Promise<ActionResult> {
   const parsed = notificationsSchema.safeParse(raw);
   if (!parsed.success) return fail(parsed.error);
 
-  store.updateNotifications(parsed.data);
+  try {
+    await db.updateNotifications(parsed.data);
+  } catch (e) {
+    return { ok: false, error: errMsg(e) };
+  }
   refresh();
   return { ok: true, message: "Notificaciones actualizadas." };
 }
@@ -96,7 +114,11 @@ export async function updateSlug(raw: unknown): Promise<ActionResult> {
     return { ok: false, error: "Ese subdominio está reservado. Elige otro." };
   }
 
-  store.updateSlug(parsed.data);
+  try {
+    await db.updateSlug(parsed.data);
+  } catch (e) {
+    return { ok: false, error: errMsg(e) };
+  }
   refresh();
   return { ok: true, message: `Tu página ahora vive en ${parsed.data}.${ROOT_DOMAIN}` };
 }
@@ -112,14 +134,14 @@ export async function addDomain(raw: unknown): Promise<ActionResult> {
   if (domain === ROOT_DOMAIN || domain.endsWith(`.${ROOT_DOMAIN}`)) {
     return { ok: false, error: "Ese dominio pertenece a Navaja. Usa tu propio dominio." };
   }
-  if (!store.getPlan().customDomain) {
-    return { ok: false, error: "Tu plan no incluye dominio propio. Cambia a Pro." };
+  try {
+    if (!(await db.getPlan()).customDomain) {
+      return { ok: false, error: "Tu plan no incluye dominio propio. Cambia a Pro." };
+    }
+    await db.addCustomDomain(domain);
+  } catch (e) {
+    return { ok: false, error: errMsg(e) };
   }
-  if (store.getDomains().some((d) => d.domain === domain)) {
-    return { ok: false, error: "Ese dominio ya está agregado." };
-  }
-
-  store.addCustomDomain(domain);
   refresh();
   return { ok: true, message: "Dominio agregado. Configura los registros DNS." };
 }
@@ -128,29 +150,40 @@ export async function verifyDomain(raw: unknown): Promise<ActionResult> {
   const limited = await guard("domain");
   if (limited) return { ok: false, error: limited };
 
-  const parsed = storeIdSchema.safeParse(raw);
+  const parsed = entityIdSchema.safeParse(raw);
   if (!parsed.success) return fail(parsed.error);
 
-  const d = store.verifyDomain(parsed.data);
-  if (!d) return { ok: false, error: "Dominio no encontrado." };
-  refresh();
-  return {
-    ok: true,
-    message:
-      d.status === "activo"
-        ? "¡Dominio verificado! Ya sirve tráfico con SSL."
-        : "Registros detectados. Emitiendo certificado…",
-  };
+  try {
+    const status = await db.verifyDomain(parsed.data);
+    if (!status) return { ok: false, error: "Dominio no encontrado." };
+    refresh();
+    return {
+      ok: true,
+      message:
+        status === "activo"
+          ? "¡Dominio verificado! Ya sirve tráfico con SSL."
+          : "Registros detectados. Emitiendo certificado…",
+    };
+  } catch (e) {
+    return { ok: false, error: errMsg(e) };
+  }
 }
 
 export async function removeDomain(raw: unknown): Promise<ActionResult> {
   const limited = await guard("domain");
   if (limited) return { ok: false, error: limited };
 
-  const parsed = storeIdSchema.safeParse(raw);
+  const parsed = entityIdSchema.safeParse(raw);
   if (!parsed.success) return fail(parsed.error);
+  if (parsed.data === "sub") {
+    return { ok: false, error: "El subdominio incluido no se puede eliminar." };
+  }
 
-  store.removeDomain(parsed.data);
+  try {
+    await db.removeDomain(parsed.data);
+  } catch (e) {
+    return { ok: false, error: errMsg(e) };
+  }
   refresh();
   return { ok: true, message: "Dominio eliminado." };
 }
@@ -159,10 +192,14 @@ export async function setPrimaryDomain(raw: unknown): Promise<ActionResult> {
   const limited = await guard("domain");
   if (limited) return { ok: false, error: limited };
 
-  const parsed = storeIdSchema.safeParse(raw);
+  const parsed = entityIdSchema.safeParse(raw);
   if (!parsed.success) return fail(parsed.error);
 
-  store.setPrimaryDomain(parsed.data);
+  try {
+    await db.setPrimaryDomain(parsed.data);
+  } catch (e) {
+    return { ok: false, error: errMsg(e) };
+  }
   refresh();
   return { ok: true, message: "Dominio principal actualizado." };
 }
@@ -175,11 +212,11 @@ export async function inviteMember(raw: unknown): Promise<ActionResult> {
   const parsed = inviteMemberSchema.safeParse(raw);
   if (!parsed.success) return fail(parsed.error);
 
-  if (store.getMembers().some((m) => m.email === parsed.data.email)) {
-    return { ok: false, error: "Esa persona ya tiene acceso." };
+  try {
+    await db.inviteMember(parsed.data.name, parsed.data.email, parsed.data.role);
+  } catch (e) {
+    return { ok: false, error: errMsg(e) };
   }
-
-  store.inviteMember(parsed.data.name, parsed.data.email, parsed.data.role);
   refresh();
   return { ok: true, message: `Invitación enviada a ${parsed.data.email}.` };
 }
@@ -188,10 +225,15 @@ export async function removeMember(raw: unknown): Promise<ActionResult> {
   const limited = await guard("team");
   if (limited) return { ok: false, error: limited };
 
-  const parsed = storeIdSchema.safeParse(raw);
+  const parsed = entityIdSchema.safeParse(raw);
   if (!parsed.success) return fail(parsed.error);
+  if (parsed.data === "sub") return { ok: false, error: "Identificador inválido." };
 
-  store.removeMember(parsed.data);
+  try {
+    await db.removeMember(parsed.data);
+  } catch (e) {
+    return { ok: false, error: errMsg(e) };
+  }
   refresh();
   return { ok: true, message: "Acceso revocado." };
 }
@@ -204,7 +246,11 @@ export async function changePlan(raw: unknown): Promise<ActionResult> {
   const parsed = planIdSchema.safeParse(raw);
   if (!parsed.success) return fail(parsed.error);
 
-  store.changePlan(parsed.data);
+  try {
+    await db.changePlan(parsed.data);
+  } catch (e) {
+    return { ok: false, error: errMsg(e) };
+  }
   refresh();
   return { ok: true, message: "Plan actualizado." };
 }

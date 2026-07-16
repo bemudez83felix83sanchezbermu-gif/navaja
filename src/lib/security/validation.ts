@@ -24,13 +24,8 @@ const phone = z
   .max(20, "Teléfono demasiado largo")
   .regex(/^[\d\s()+-]+$/, "Teléfono inválido");
 
-/** IDs in the data model are opaque slugs/uuids — restrict the charset. */
-const id = z
-  .string()
-  .trim()
-  .min(1)
-  .max(64)
-  .regex(/^[a-zA-Z0-9_-]+$/, "Identificador inválido");
+/** IDs reales de la base de datos (uuid v4 de Postgres). */
+export const uuidSchema = z.string().uuid("Identificador inválido");
 
 /**
  * Booking submission. Includes anti-bot fields:
@@ -42,8 +37,9 @@ export const MIN_FILL_MS = 2500;
 
 export const bookingInputSchema = z
   .object({
-    serviceId: id,
-    barberId: z.union([id, z.literal("any")]),
+    shopId: uuidSchema,
+    serviceId: uuidSchema,
+    barberId: z.union([uuidSchema, z.literal("any")]),
     slotIso: z
       .string()
       .datetime({ message: "Fecha/hora inválida" })
@@ -80,10 +76,12 @@ export const slugSchema = z
   .regex(/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/, "Solo minúsculas, números y guiones (2–40)")
   .refine((s) => !s.includes("--"), "Sin guiones dobles");
 
-/** Reserved labels that can never be tenant subdomains. */
+/** Reserved labels: ni subdominios de tenant ni slugs que tapen rutas de la app. */
 export const RESERVED_SLUGS = new Set([
   "www", "app", "api", "admin", "dashboard", "panel", "mail", "smtp",
   "soporte", "ayuda", "blog", "docs", "status", "cdn", "assets", "dominios",
+  // rutas de cuenta y legales (src/app/*): un tenant con este slug las taparía
+  "login", "registro", "recuperar", "restablecer", "auth", "legal", "cuenta",
 ]);
 
 /**
@@ -137,6 +135,47 @@ export const notificationsSchema = z
     whatsappChannel: z.boolean(),
     ownerNewBookingEmail: z.boolean(),
     senderName: boundedString(2, 60),
+    /** WhatsApp del dueño; vacío = aún sin configurar. */
+    ownerPhone: z.union([z.literal(""), phone]),
+  })
+  .strict();
+
+/* ------------------------------------------------------------------ *
+ * Cuentas (registro / login / recuperación)
+ * ------------------------------------------------------------------ */
+
+export const emailSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .email("Correo inválido")
+  .max(120);
+
+/** Contraseña: 8–72 (límite bcrypt), al menos una letra y un número. */
+export const passwordSchema = z
+  .string()
+  .min(8, "Mínimo 8 caracteres")
+  .max(72, "Máximo 72 caracteres")
+  .regex(/[a-zA-Z]/, "Incluye al menos una letra")
+  .regex(/[0-9]/, "Incluye al menos un número");
+
+export const signupSchema = z
+  .object({
+    ownerName: boundedString(2, 80),
+    shopName: boundedString(2, 80),
+    email: emailSchema,
+    password: passwordSchema,
+    /** Consentimiento LFPDPPP: sin aceptar Términos + Aviso no hay cuenta. */
+    acceptTerms: z.literal(true, {
+      message: "Debes aceptar los Términos y el Aviso de Privacidad",
+    }),
+  })
+  .strict();
+
+export const loginSchema = z
+  .object({
+    email: emailSchema,
+    password: z.string().min(1, "Escribe tu contraseña").max(72),
   })
   .strict();
 
@@ -150,13 +189,39 @@ export const inviteMemberSchema = z
 
 export const planIdSchema = z.enum(["esencial", "pro", "estudio"]);
 
-/** Opaque store ids (dom_xxx, mem_xxx). */
-export const storeIdSchema = z
-  .string()
-  .trim()
-  .min(3)
-  .max(40)
-  .regex(/^[a-z]+_[a-zA-Z0-9-]+$/, "Identificador inválido");
+/** Id de entidad: uuid de la DB o "sub" (el subdominio administrado, sintético). */
+export const entityIdSchema = z.union([uuidSchema, z.literal("sub")]);
+
+/* ------------------------------------------------------------------ *
+ * CRUD de catálogo (servicios y barberos)
+ * ------------------------------------------------------------------ */
+
+export const serviceInputSchema = z
+  .object({
+    id: uuidSchema.optional(),
+    name: boundedString(2, 80),
+    description: boundedString(0, 200).optional().default(""),
+    durationMin: z.number().int().min(5, "Mínimo 5 min").max(600, "Máximo 10 h"),
+    priceCents: z.number().int().min(0, "Precio inválido").max(10_000_000),
+    popular: z.boolean(),
+  })
+  .strict();
+
+export const barberInputSchema = z
+  .object({
+    id: uuidSchema.optional(),
+    name: boundedString(2, 80),
+    role: boundedString(0, 60).optional().default(""),
+    bio: boundedString(0, 300).optional().default(""),
+    specialties: z.array(boundedString(1, 30)).max(8, "Máximo 8 especialidades"),
+    accent: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Color inválido"),
+    serviceIds: z.array(uuidSchema).max(50),
+  })
+  .strict();
+
+export const activeToggleSchema = z
+  .object({ id: uuidSchema, active: z.boolean() })
+  .strict();
 
 /**
  * Server-side environment validation schema. See `env.ts`.

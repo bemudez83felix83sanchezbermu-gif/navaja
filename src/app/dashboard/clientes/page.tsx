@@ -1,27 +1,22 @@
-import { Plus, Phone, StickyNote } from "lucide-react";
-import { CLIENTS } from "@/lib/data/mock";
+import { Phone, StickyNote } from "lucide-react";
+import { getClients } from "@/lib/data/queries";
 import { PageShell, PageHeader } from "@/components/dashboard/PageHeader";
 import { Card } from "@/components/ui/Card";
-import { Button } from "@/components/ui/Button";
 import { Avatar } from "@/components/ui/Avatar";
-import { formatDayShort, pickBySeed } from "@/lib/utils";
+import { daysSince, formatDayShort, pickBySeed } from "@/lib/utils";
 
 const ACCENTS = ["#a16207", "#0369a1", "#047857", "#7c2d12", "#6d28d9", "#b91c1c"];
 const pickAccent = (seed: string) => pickBySeed(ACCENTS, seed);
 
-export default function ClientesPage() {
-  const clients = [...CLIENTS].sort((a, b) => b.visits - a.visits);
+export default async function ClientesPage() {
+  // La vista client_stats trae visitas completadas y última visita ya calculadas.
+  const clients = await getClients();
 
   return (
     <PageShell>
       <PageHeader
         title="Clientes"
-        subtitle={`${CLIENTS.length} clientes en tu base.`}
-        actions={
-          <Button size="md">
-            <Plus className="h-4 w-4" /> Nuevo cliente
-          </Button>
-        }
+        subtitle={`${clients.length} clientes en tu base. Se agregan solos al reservar.`}
       />
 
       <Card className="overflow-hidden">
@@ -30,7 +25,7 @@ export default function ClientesPage() {
           <span>Cliente</span>
           <span>Visitas</span>
           <span>Última visita</span>
-          <span className="w-20 text-right">Acción</span>
+          <span className="w-20 text-right">Contacto</span>
         </div>
 
         <div className="divide-y divide-stone-100">
@@ -44,9 +39,7 @@ export default function ClientesPage() {
                 <div className="min-w-0">
                   <p className="flex items-center gap-1.5 truncate text-sm font-semibold text-ink">
                     {c.name}
-                    {c.notes && (
-                      <StickyNote className="h-3.5 w-3.5 text-gold" />
-                    )}
+                    {c.notes && <StickyNote className="h-3.5 w-3.5 text-gold" />}
                   </p>
                   <p className="flex items-center gap-1 truncate text-xs text-stone-500">
                     <Phone className="h-3 w-3" /> {c.phone}
@@ -60,16 +53,25 @@ export default function ClientesPage() {
               </div>
 
               <div className="text-sm text-stone-500">
-                Hace {Math.max(1, Math.round((Date.now() - new Date(c.lastVisit).getTime()) / 86400000))} días
-                <span className="ml-1 hidden text-stone-400 md:inline">
-                  ({formatDayShort(new Date(c.lastVisit))})
-                </span>
+                {c.visits > 0 ? (
+                  <>
+                    Hace {daysSince(c.lastVisit)} días
+                    <span className="ml-1 hidden text-stone-400 md:inline">
+                      ({formatDayShort(new Date(c.lastVisit))})
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-stone-400">Aún sin visitas</span>
+                )}
               </div>
 
               <div className="sm:w-20 sm:text-right">
-                <button className="text-sm font-medium text-stone-500 hover:text-ink">
-                  Ver ficha
-                </button>
+                <a
+                  href={`tel:${c.phone.replace(/\s/g, "")}`}
+                  className="text-sm font-medium text-stone-500 hover:text-ink"
+                >
+                  Llamar
+                </a>
               </div>
             </div>
           ))}

@@ -11,16 +11,25 @@ Postura de seguridad **defense-in-depth** (en capas). Ninguna capa es perfecta; 
 | Datos de clientes (PII) | Acceso entre tenants | RLS por `barbershop_id` | `supabase/policies.sql` |
 | Citas | Doble reserva / manipulación | RPC validado + `EXCLUDE` constraint | `supabase/*.sql` |
 | Formulario de reserva | Spam / bots | Rate-limit + honeypot + timing + Zod | `src/lib/security/`, `actions/book.ts` |
-| Toda la app | XSS | CSP con nonce + `strict-dynamic` | `src/middleware.ts`, `lib/security/csp.ts` |
+| Cuentas de dueños | Credential stuffing / fuerza bruta | Rate-limit por IP + mensajes no reveladores | `actions/auth.ts` |
+| Panel (dashboard) | Acceso sin sesión / entre tenants | Guard optimista en proxy + `requireMembership()` en la capa de datos | `src/proxy.ts`, `lib/auth.ts` |
+| Toda la app | XSS | CSP con nonce + `strict-dynamic` | `src/proxy.ts`, `lib/security/csp.ts` |
 | Toda la app | Clickjacking | `frame-ancestors 'none'` + `X-Frame-Options` | `csp.ts` |
-| Sesión (futuro) | CSRF | Server Actions (Origin check) + cookies `SameSite` | `actions/book.ts` |
+| Sesión | CSRF | Server Actions (Origin check) + cookies `SameSite=Lax` httpOnly | `actions/*.ts`, `@supabase/ssr` |
 | Secretos | Fuga al cliente / repo | `.env*` ignorado, validación de env, server-only | `.gitignore`, `lib/security/env.ts` |
 | Transporte | Downgrade / sniffing | HSTS + `upgrade-insecure-requests` (prod) | `csp.ts` |
 | Errores | Fuga de stack/internos | Boundaries sin detalle, sólo `digest` | `app/error.tsx`, `global-error.tsx` |
 
 ## 2. Controles implementados
 
-### Cabeceras HTTP de seguridad (`src/middleware.ts` + `lib/security/csp.ts`)
+### Autenticación y autorización (`src/lib/auth.ts`, `actions/auth.ts`, `src/proxy.ts`)
+- **Supabase Auth con cookies** (`@supabase/ssr`): httpOnly, `SameSite=Lax`; el token se refresca en el proxy (los Server Components no pueden escribir cookies).
+- **Dos capas** (patrón recomendado por Next): el proxy hace el chequeo *optimista* (redirige `/dashboard` → `/login` sin sesión) y la capa de datos hace el chequeo *seguro*: toda query del panel sin slug explícito resuelve el tenant vía `requireMembership()` (sesión verificada con `auth.getUser()` + fila en `memberships`). Sin membresía no hay datos.
+- **Registro** crea usuario + barbería + membresía + prueba de 14 días con rollback si falla a medias; el consentimiento (versión y fecha de Términos/Aviso) queda en `app_metadata`, que el usuario **no** puede editar (evidencia LFPDPPP).
+- **Login/recuperación**: mensajes genéricos (no revelan si un correo existe), rate-limit por IP (8/min login, 5/10 min registro, 3/10 min reset), reset por enlace PKCE (`/auth/callback` con anti open-redirect).
+- Slugs reservados (`login`, `registro`, `legal`, `auth`, …) para que ningún tenant tape rutas de la app.
+
+### Cabeceras HTTP de seguridad (`src/proxy.ts` + `lib/security/csp.ts`)
 - **Content-Security-Policy** con **nonce por petición** y `'strict-dynamic'` en producción (sin `'unsafe-inline'` en scripts). En desarrollo se relaja para HMR/Turbopack.
 - `Strict-Transport-Security` (prod), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `frame-ancestors 'none'`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy` (cámara/micro/geo deshabilitados), `Cross-Origin-Opener-Policy` y `Cross-Origin-Resource-Policy: same-origin`.
 - `X-Powered-By` desactivado y sin source maps de navegador en prod (`next.config.ts`).
@@ -60,7 +69,8 @@ El proxy de seguridad vive en `src/proxy.ts` (convención de Next 16; reemplaza 
 - Mantén el lockfile commiteado y actualiza con criterio (Dependabot/renovate recomendado).
 
 ## 4. Pendiente / no cubierto aún (honesto)
-- **Auth real** (Supabase Auth) y MFA para dueños — el panel hoy es demo.
+- **MFA** para dueños (Supabase lo soporta; falta UI).
+- **Confirmación de correo** en el alta (hoy `email_confirm: true` vía admin para no depender de SMTP; activar al configurar un remitente propio).
 - **Rate limit distribuido** (Upstash/Redis) — el actual es por instancia.
 - WAF/anti-DDoS perimetral (Vercel/Cloudflare).
 - Registro de auditoría y alertas.
@@ -70,8 +80,11 @@ El proxy de seguridad vive en `src/proxy.ts` (convención de Next 16; reemplaza 
 - [ ] `npm audit` sin vulnerabilidades altas/críticas.
 - [ ] Variables en `.env.local`/secrets del hosting (nunca en el repo).
 - [ ] `schema.sql` + `policies.sql` aplicados; probar acceso cruzado entre tenants (debe fallar).
+- [ ] Supabase Auth: configurar **Site URL + Redirect URLs** (si no, el email de recuperación no vuelve a la app) y SMTP propio (el default limita ~3 correos/hora).
+- [ ] Probar `/dashboard` sin sesión (debe redirigir a `/login`) y login con credenciales malas (mensaje genérico + rate-limit).
 - [ ] Verificar cabeceras en prod (`curl -I`): CSP, HSTS, nosniff, frame-ancestors.
 - [ ] Probar el flujo de reserva con honeypot lleno (debe rechazar).
+- [ ] Revisar textos de `/legal/*` con abogado y sustituir la razón social placeholder (`src/lib/legal.ts`).
 - [ ] HTTPS forzado en el hosting.
 
 ## 6. Reporte de vulnerabilidades
