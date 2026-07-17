@@ -37,6 +37,7 @@ alter table subscriptions  enable row level security;
 alter table notifications_log enable row level security;
 alter table payment_accounts enable row level security;
 alter table payments        enable row level security;
+alter table stripe_events   enable row level security;
 
 -- ---- barbershops ----------------------------------------------------------
 create policy barbershops_public_read on barbershops
@@ -137,6 +138,8 @@ revoke all on invitations   from anon;
 revoke all on subscriptions from anon;
 revoke all on notifications_log from anon;
 revoke all on payments      from anon;
+-- stripe_events: solo el webhook (service_role). Sin políticas a propósito.
+revoke all on stripe_events from anon, authenticated;
 
 -- ---- Vista pública de horarios ocupados (sin PII) -------------------------
 -- Expone SOLO barbero + rango horario para que el cliente calcule disponibilidad.
@@ -394,4 +397,7 @@ begin
 end $$;
 
 -- Solo el backend (service_role) llama esta función; no se expone a anon/authenticated.
+-- ⚠️ Supabase otorga EXECUTE a anon/authenticated por DEFAULT PRIVILEGES (no vía
+-- PUBLIC), así que revocar de public NO basta — hay que revocarles explícito.
 revoke all on function confirm_paid_appointment(uuid, text, int, jsonb) from public;
+revoke execute on function confirm_paid_appointment(uuid, text, int, jsonb) from anon, authenticated;

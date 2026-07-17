@@ -261,6 +261,9 @@ export interface Subscription {
   /** ISO — next renewal */
   renewsAt: string;
   startedAt: string;
+  /** Stripe Billing (Track B). null = trial app-side o modo demo sin Stripe. */
+  stripeSubscriptionId?: string | null;
+  currentPeriodEnd?: string | null;
 }
 
 export interface Invoice {
@@ -268,4 +271,6 @@ export interface Invoice {
   date: string; // ISO
   amountCents: number;
   status: "pagada" | "pendiente";
+  /** hosted_invoice_url de Stripe — la factura se ve/descarga allá. */
+  url?: string;
 }

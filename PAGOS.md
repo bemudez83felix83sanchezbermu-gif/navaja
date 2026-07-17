@@ -173,39 +173,65 @@ Barbería ──paga plan mensual──► Cuenta Stripe de Navaja     (Track B)
 
 ## Track B — Suscripciones del SaaS con Stripe Billing
 
-### B0 — Preparación externa
+> **Estado (2026-07-16): B0–B3 implementados Y VERIFICADOS end-to-end en test
+> mode.** Checkout real con tarjeta 4242 → suscripción Pro activa; webhook
+> probado con eventos REALES re-firmados localmente (checkout.session.completed
+> → sync pro/activa, duplicado → already_processed, firma inválida → 401,
+> subscription.deleted → cancelada); Customer Portal y facturas al vuelo
+> funcionando. La cuenta test conserva customer + suscripción cancelada +
+> factura pagada como evidencia. Falta: B4 (gating por límites) + B5 (test
+> clocks) y registrar el endpoint del webhook cuando exista dominio. Modo live
+> sigue bloqueado por el RFC (cita SAT). ⚠️ La `STRIPE_SECRET_KEY` de test
+> pasó por el chat — girarla en el dashboard.
+
+### B0 — Preparación externa ✅ (test mode, 2026-07-16)
 
 - Cuenta Stripe (modo test ya; **activar live requiere RFC/datos fiscales**
   → depende de la cita del SAT, no bloquea el desarrollo).
 - Products/Prices para Esencial/Pro/Estudio en MXN (espejo de
-  `src/lib/data/plans.ts`), creados por script de seed idempotente.
+  `src/lib/data/plans.ts`) — creados vía MCP en la cuenta test
+  (`acct_1Tu0Ag1JTHBIvqZj`): `price_1Tu11g…` / `price_1Tu11o…` / `price_1Tu11q…`
+  (los IDs completos viven en `.env.example`).
 - Env vars: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
-  `STRIPE_PRICE_ESENCIAL|PRO|ESTUDIO`. SDK: `npm install stripe`.
+  `STRIPE_PRICE_ESENCIAL|PRO|ESTUDIO`. SDK: `stripe` v22 instalado.
+- Sin env configurada el panel opera en **modo demo** (cambio de plan directo
+  en DB, sin cobro) — `main` sigue funcional en dev.
 
-### B1 — Modelo de datos
+### B1 — Modelo de datos ✅ (migración `stripe_billing_track_b_schema`)
 
-- `barbershops.stripe_customer_id`.
-- `subscriptions` (ya existe, hoy mock): agregar `stripe_subscription_id`,
-  `current_period_end`; mapear estados de Stripe → `activa`|`prueba`|
-  `cancelada` (+ decidir cómo mostrar `past_due`: gracia con banner).
-- Facturas: NO almacenar; leerlas de la API de Stripe al vuelo para la
-  lista del `PlanPanel` (menos sincronización que mantener).
+- `barbershops.stripe_customer_id` (unique parcial; customer lazy en el
+  primer checkout).
+- `subscriptions`: `stripe_subscription_id` (unique parcial) +
+  `current_period_end`. Estados de Stripe → locales: `trialing`→`prueba`;
+  `active`/`past_due`→`activa` (past_due = gracia, Stripe reintenta);
+  `canceled`/`unpaid`/`paused`→`cancelada`; `incomplete*` se ignora (checkout
+  abandonado, no pisa la fila local).
+- `stripe_events` (id pk) — idempotencia del webhook. RLS sin políticas +
+  revoke explícito: solo service_role.
+- Facturas: NO se almacenan; se leen de la API al vuelo para la lista del
+  `PlanPanel` (`listShopInvoices`, últimas 12, paid|open).
 
-### B2 — Checkout y portal
+### B2 — Checkout y portal ✅ (`src/lib/payments/stripe.ts`)
 
-- `PlanPanel`: "Mejorar plan" → server action que crea Checkout Session
-  (`mode: subscription`, con trial si aplica) y redirige.
-- "Administrar suscripción" → sesión del **Customer Portal** de Stripe
-  (cambio de plan, tarjeta, cancelación) — no construimos esa UI.
+- `PlanPanel`: "Cambiar a X" → `startPlanCheckout`: sin suscripción Stripe →
+  Checkout Session (`mode: subscription`, sin trial en checkout — el trial es
+  app-side, decidido 2026-07-16); ya suscrita → Customer Portal.
+- "Administrar suscripción" → `openBillingPortal` (cambio de plan, tarjeta,
+  cancelación en la UI hospedada de Stripe) — no construimos esa UI.
+- Retorno a `/dashboard/configuracion/plan?checkout=exito|cancelado` con
+  banner; la verdad la escribe el webhook, nunca el redirect.
 
-### B3 — Webhook `POST /api/webhooks/stripe`
+### B3 — Webhook `POST /api/webhooks/stripe` ✅
 
 - Verificación con `stripe.webhooks.constructEvent` + idempotencia por
-  `event.id`. ⚠️ Necesita el body CRUDO (`await req.text()`, nunca
-  `req.json()` antes de verificar) — el bug clásico de este webhook.
-- Eventos: `checkout.session.completed`, `customer.subscription.updated`,
-  `customer.subscription.deleted`, `invoice.paid`,
-  `invoice.payment_failed` → sincronizan `subscriptions`.
+  `event.id` en `stripe_events` (23505 = ya procesado; si el handler falla,
+  se borra la marca para que el retry sí procese). ⚠️ Body CRUDO
+  (`await req.text()`, nunca `req.json()` antes de verificar).
+- Sincroniza desde `checkout.session.completed` (retrieve de la suscripción)
+  y `customer.subscription.updated|deleted`. `invoice.paid` no hace falta
+  (cada renovación llega también como subscription.updated con el nuevo
+  `current_period_end` — en API Basil vive en el subscription item);
+  `invoice.payment_failed` = log + gracia.
 
 ### B4 — Gating por plan
 
@@ -247,7 +273,7 @@ Barbería ──paga plan mensual──► Cuenta Stripe de Navaja     (Track B)
 | 2 | A2 (OAuth + panel Pagos) + check de plan en `savePaymentRules` (rebanada de B4, por la decisión Pro/Estudio) | M |
 | 3 | A3 + A4 (checkout + webhook — el corazón) | L |
 | 4 | A5 + A6 (refunds, UI dueño, QA sandbox) | M |
-| 5 | B0–B3 (Billing completo) | M |
+| 5 | ✅ B0–B3 (Billing en test mode) — implementado y verificado end-to-end 2026-07-16 (checkout real 4242 + webhook con eventos re-firmados + portal) | M |
 | 6 | B4 + B5 (gating + QA) | S |
 
 Cada paso deja `main` funcional (el modo default es `payment_mode='off'`,
@@ -268,6 +294,8 @@ así que nada cambia para barberías sin pagos hasta que conectan su cuenta).
    **CONFIRMADO (2026-07-16)** — el hold solo aplica al wizard público; además
    el dashboard no puede poner `pendiente_pago` a mano (enum del action) y un
    hold solo admite "cancelar" desde el drawer (confirmar es del webhook).
-5. ¿Trial del SaaS con tarjeta por delante o sin tarjeta? (afecta B2;
-   recomendación: sin tarjeta — trial app-side con el estado `prueba` que ya
-   existe en `subscriptions`, Checkout solo al convertir). — antes del paso 5.
+5. ~~¿Trial del SaaS con tarjeta por delante o sin tarjeta?~~
+   **DECIDIDO (2026-07-16): sin tarjeta** — trial app-side con el estado
+   `prueba` que ya existe en `subscriptions`; Checkout solo al convertir.
+   Cero suscripciones `incomplete` en Stripe y menos fricción en el alta.
+   Aplicado en B2 (el Checkout no manda `trial_period_days`).

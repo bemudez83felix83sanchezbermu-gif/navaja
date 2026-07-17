@@ -273,8 +273,20 @@ export async function removeMember(raw: unknown): Promise<ActionResult> {
   return { ok: true, message: "Acceso revocado." };
 }
 
-/* ---------------- Plan ---------------- */
-export async function changePlan(raw: unknown): Promise<ActionResult> {
+/* ---------------- Plan (Stripe Billing — Track B) ---------------- */
+/** Como ActionResult, pero puede pedir un redirect (Checkout/Portal de Stripe). */
+export type BillingResult = ActionResult | { ok: true; url: string };
+
+/**
+ * Contratar/cambiar plan. Tres rutas:
+ *  - Stripe sin configurar → cambio directo en DB (modo demo, comportamiento
+ *    original) para que dev/preview sigan funcionando sin cuenta.
+ *  - Sin suscripción de Stripe todavía (trial app-side) → Checkout Session.
+ *  - Ya suscrita → Customer Portal (cambio de plan/tarjeta/cancelación viven
+ *    en la UI hospedada de Stripe).
+ * El webhook es quien actualiza `subscriptions` — el redirect no confirma nada.
+ */
+export async function startPlanCheckout(raw: unknown): Promise<BillingResult> {
   const limited = await guard("plan");
   if (limited) return { ok: false, error: limited };
 
@@ -282,10 +294,42 @@ export async function changePlan(raw: unknown): Promise<ActionResult> {
   if (!parsed.success) return fail(parsed.error);
 
   try {
-    await db.changePlan(parsed.data);
+    const { stripeConfigured, createPlanCheckout, createPortalSession } =
+      await import("@/lib/payments/stripe");
+
+    if (!stripeConfigured()) {
+      await db.changePlan(parsed.data);
+      refresh();
+      return { ok: true, message: "Plan actualizado (modo demo, sin cobro)." };
+    }
+
+    const [shop, sub] = await Promise.all([db.getShop(), db.getSubscription()]);
+    if (sub.planId === parsed.data && sub.stripeSubscriptionId) {
+      return { ok: false, error: "Ya estás en ese plan." };
+    }
+
+    const url = sub.stripeSubscriptionId
+      ? await createPortalSession(shop.id)
+      : await createPlanCheckout({ shopId: shop.id, plan: parsed.data });
+    return { ok: true, url };
   } catch (e) {
     return { ok: false, error: errMsg(e) };
   }
-  refresh();
-  return { ok: true, message: "Plan actualizado." };
+}
+
+/** "Administrar suscripción" → Customer Portal de Stripe. */
+export async function openBillingPortal(): Promise<BillingResult> {
+  const limited = await guard("portal");
+  if (limited) return { ok: false, error: limited };
+
+  try {
+    const { stripeConfigured, createPortalSession } = await import("@/lib/payments/stripe");
+    if (!stripeConfigured()) {
+      return { ok: false, error: "La facturación con Stripe aún no está configurada." };
+    }
+    const shop = await db.getShop();
+    return { ok: true, url: await createPortalSession(shop.id) };
+  } catch (e) {
+    return { ok: false, error: errMsg(e) };
+  }
 }

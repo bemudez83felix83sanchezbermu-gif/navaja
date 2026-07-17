@@ -279,4 +279,12 @@ export const envSchema = z.object({
     .string()
     .regex(/^[0-9a-f]{64}$/i, "Deben ser 64 caracteres hex (32 bytes)")
     .optional(),
+  // Stripe Billing — suscripciones del SaaS (Track B de PAGOS.md). Cuenta
+  // única de Navaja, sin Connect. Sin estas vars el panel de plan opera en
+  // modo demo (cambia el plan en DB directo, sin cobro).
+  STRIPE_SECRET_KEY: z.string().min(1).optional(),
+  STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
+  STRIPE_PRICE_ESENCIAL: z.string().min(1).optional(),
+  STRIPE_PRICE_PRO: z.string().min(1).optional(),
+  STRIPE_PRICE_ESTUDIO: z.string().min(1).optional(),
 });

@@ -66,6 +66,9 @@ create table if not exists barbershops (
                         check (payment_mode in ('off','anticipo_fijo','porcentaje','total')),
   payment_deposit_cents int not null default 0 check (payment_deposit_cents >= 0),
   payment_percent       int not null default 50 check (payment_percent between 1 and 100),
+  -- Cliente de Stripe Billing (Track B de PAGOS.md) — se crea lazy en el
+  -- primer checkout de upgrade. NULL = nunca ha pasado por Stripe.
+  stripe_customer_id    text,
   -- Dueño mostrado en /configuracion/equipo hasta que exista auth real
   owner_name  text,
   owner_email text,
@@ -75,13 +78,31 @@ create table if not exists barbershops (
   created_at  timestamptz not null default now()
 );
 
--- ---- Suscripción (mock de billing; Stripe/Conekta llegará después) ---------
+-- ---- Suscripción (sincronizada desde el webhook de Stripe — Track B) --------
+-- El estado local es la fuente para el gating por plan; Stripe es la fuente
+-- del dinero. `stripe_subscription_id` NULL = trial app-side (estado 'prueba')
+-- o billing en modo demo sin Stripe configurado.
 create table if not exists subscriptions (
   barbershop_id uuid primary key references barbershops(id) on delete cascade,
   plan          plan_id not null default 'esencial',
   status        text not null default 'activa' check (status in ('activa','prueba','cancelada')),
   started_at    timestamptz not null default now(),
-  renews_at     timestamptz
+  renews_at     timestamptz,
+  stripe_subscription_id text,
+  current_period_end     timestamptz
+);
+create unique index if not exists subscriptions_stripe_sub_uq
+  on subscriptions (stripe_subscription_id) where stripe_subscription_id is not null;
+create unique index if not exists barbershops_stripe_customer_uq
+  on barbershops (stripe_customer_id) where stripe_customer_id is not null;
+
+-- Idempotencia del webhook de Stripe por event.id (Stripe reintenta y duplica).
+-- Solo la escribe el webhook con service_role: RLS activa sin políticas +
+-- revoke explícito (en policies.sql) = cero acceso para anon/authenticated.
+create table if not exists stripe_events (
+  id          text primary key,
+  type        text not null,
+  received_at timestamptz not null default now()
 );
 
 -- ---- Dominios por tenant ---------------------------------------------------

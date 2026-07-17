@@ -72,6 +72,7 @@ interface ShopRow {
   payment_mode: string;
   payment_deposit_cents: number;
   payment_percent: number;
+  stripe_customer_id: string | null;
   owner_name: string | null;
   owner_email: string | null;
   rating: number;
@@ -877,7 +878,7 @@ export async function removeMember(id: string): Promise<void> {
 }
 
 /* ------------------------------------------------------------------ *
- * Plan y facturación (billing real llegará con Stripe/Conekta)
+ * Plan y facturación (Stripe Billing — Track B de PAGOS.md)
  * ------------------------------------------------------------------ */
 
 export async function getSubscription(): Promise<Subscription> {
@@ -903,6 +904,8 @@ export async function getSubscription(): Promise<Subscription> {
     status: data.status,
     renewsAt: data.renews_at ?? new Date().toISOString(),
     startedAt: data.started_at,
+    stripeSubscriptionId: data.stripe_subscription_id ?? null,
+    currentPeriodEnd: data.current_period_end ?? null,
   };
 }
 
@@ -911,6 +914,7 @@ export async function getPlan(): Promise<Plan> {
   return PLANS.find((p) => p.id === sub.planId) ?? PLANS[1];
 }
 
+/** Cambio directo de plan — SOLO modo demo (Stripe sin configurar). */
 export async function changePlan(planId: PlanId): Promise<void> {
   const shop = await mustShopRow();
   const { error } = await dbAdmin()
@@ -919,8 +923,41 @@ export async function changePlan(planId: PlanId): Promise<void> {
   if (error) throw new Error(`[db:plan] ${error.message}`);
 }
 
-/** Historial de facturas sintético a partir de la suscripción (billing mock). */
+/**
+ * Sincroniza la fila local desde el webhook de Stripe (única vía de escritura
+ * con billing real). `planId` null = price desconocido → conserva el plan
+ * actual (no pisamos el gating con datos que no entendemos).
+ */
+export async function syncStripeSubscription(input: {
+  barbershopId: UUID;
+  planId: PlanId | null;
+  status: Subscription["status"];
+  stripeSubscriptionId: string;
+  currentPeriodEnd: string | null;
+}): Promise<void> {
+  const patch: Record<string, unknown> = {
+    barbershop_id: input.barbershopId,
+    status: input.status,
+    stripe_subscription_id: input.stripeSubscriptionId,
+    current_period_end: input.currentPeriodEnd,
+    renews_at: input.currentPeriodEnd,
+  };
+  if (input.planId) patch.plan = input.planId;
+  const { error } = await dbAdmin()
+    .from("subscriptions")
+    .upsert(patch, { onConflict: "barbershop_id" });
+  if (error) throw new Error(`[db:subscription.sync] ${error.message}`);
+}
+
+/**
+ * Facturas desde la API de Stripe al vuelo (no se almacenan). Sin Stripe
+ * configurado devuelve el historial sintético de siempre (modo demo).
+ */
 export async function getInvoices(): Promise<Invoice[]> {
+  const shop = await mustShopRow();
+  const { stripeConfigured, listShopInvoices } = await import("@/lib/payments/stripe");
+  if (stripeConfigured()) return listShopInvoices(shop.id);
+
   const sub = await getSubscription();
   const plan = PLANS.find((p) => p.id === sub.planId) ?? PLANS[1];
   const out: Invoice[] = [];

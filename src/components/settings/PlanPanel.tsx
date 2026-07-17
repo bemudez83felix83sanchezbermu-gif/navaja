@@ -1,8 +1,8 @@
 "use client";
 
-import { Check, Download } from "lucide-react";
+import { Check, ExternalLink, Receipt } from "lucide-react";
 import type { Invoice, Plan, PlanId, Subscription } from "@/lib/data/types";
-import { changePlan } from "@/app/actions/settings";
+import { openBillingPortal, startPlanCheckout, type BillingResult } from "@/app/actions/settings";
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { ResultNotice, useSettingsAction } from "./shared";
@@ -31,29 +31,69 @@ function Meter({ label, used, max }: { label: string; used: number; max: number 
   );
 }
 
+const STATUS_LABEL: Record<Subscription["status"], string> = {
+  activa: "Activa",
+  prueba: "Prueba",
+  cancelada: "Cancelada",
+};
+
 export function PlanPanel({
   plans,
   subscription,
   usage,
   invoices,
+  checkoutNotice,
 }: {
   plans: Plan[];
   subscription: Subscription;
   usage: { barbers: number; appointmentsThisMonth: number };
   invoices: Invoice[];
+  /** Resultado del redirect de Checkout (?checkout=exito|cancelado). */
+  checkoutNotice?: "exito" | "cancelado";
 }) {
   const action = useSettingsAction();
   const current = plans.find((p) => p.id === subscription.planId)!;
-  const renews = new Date(subscription.renewsAt);
+  const renews = new Date(subscription.currentPeriodEnd ?? subscription.renewsAt);
+  const hasStripeSub = Boolean(subscription.stripeSubscriptionId);
+
+  /** Corre la action y, si pidió redirect (Stripe), navega. */
+  function runBilling(fn: () => Promise<BillingResult>) {
+    action.run(async () => {
+      const r = await fn();
+      if (r.ok && "url" in r) {
+        window.location.assign(r.url);
+        return { ok: true, message: "Redirigiendo a Stripe…" };
+      }
+      return r;
+    });
+  }
 
   return (
     <div className="space-y-5">
+      {checkoutNotice === "exito" && (
+        <p
+          role="status"
+          className="rounded-xl border border-success/20 bg-success-bg px-3.5 py-2.5 text-sm font-medium text-success"
+        >
+          Pago recibido. Tu plan se actualizará en unos momentos — recarga si aún
+          no lo ves reflejado.
+        </p>
+      )}
+      {checkoutNotice === "cancelado" && (
+        <p
+          role="status"
+          className="rounded-xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-medium text-stone-600"
+        >
+          Checkout cancelado — tu plan sigue igual.
+        </p>
+      )}
+
       {/* Current plan + usage */}
       <Card>
         <CardHeader>
           <CardTitle>Tu plan actual</CardTitle>
           <span className="rounded-full bg-success-bg px-2.5 py-1 text-xs font-semibold text-success">
-            {subscription.status === "activa" ? "Activa" : subscription.status}
+            {STATUS_LABEL[subscription.status]}
           </span>
         </CardHeader>
         <CardBody className="space-y-5">
@@ -62,9 +102,21 @@ export function PlanPanel({
               {current.name}
             </span>
             <span className="text-stone-500">
-              {formatPrice(current.priceCents)}/mes · se renueva el{" "}
+              {formatPrice(current.priceCents)}/mes ·{" "}
+              {subscription.status === "cancelada" ? "termina" : "se renueva"} el{" "}
               {renews.toLocaleDateString("es-MX", { day: "numeric", month: "long" })}
             </span>
+            {hasStripeSub && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="ml-auto"
+                disabled={action.pending}
+                onClick={() => runBilling(openBillingPortal)}
+              >
+                Administrar suscripción
+              </Button>
+            )}
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <Meter label="Barberos" used={usage.barbers} max={current.maxBarbers} />
@@ -113,7 +165,7 @@ export function PlanPanel({
                 size="md"
                 className="mt-5"
                 disabled={isCurrent || action.pending}
-                onClick={() => action.run(() => changePlan(p.id as PlanId))}
+                onClick={() => runBilling(() => startPlanCheckout(p.id as PlanId))}
               >
                 {isCurrent ? "Plan actual" : `Cambiar a ${p.name}`}
               </Button>
@@ -129,32 +181,50 @@ export function PlanPanel({
           <CardTitle>Facturas</CardTitle>
         </CardHeader>
         <CardBody className="pt-2">
-          <ul className="divide-y divide-stone-100">
-            {invoices.map((inv) => (
-              <li key={inv.id} className="flex items-center gap-3 py-3 text-sm">
-                <span className="tnum font-mono text-xs text-stone-500">{inv.id}</span>
-                <span className="text-stone-500">
-                  {new Date(inv.date).toLocaleDateString("es-MX", {
-                    month: "long",
-                    year: "numeric",
-                  })}
-                </span>
-                <span className="ml-auto font-semibold text-ink tnum">
-                  {formatPrice(inv.amountCents)}
-                </span>
-                <span className="rounded-full bg-success-bg px-2.5 py-0.5 text-xs font-semibold text-success">
-                  {inv.status}
-                </span>
-                <button
-                  type="button"
-                  aria-label={`Descargar factura ${inv.id}`}
-                  className="grid h-8 w-8 place-items-center rounded-lg border border-stone-200 text-stone-400 transition-colors hover:border-stone-400 hover:text-ink"
-                >
-                  <Download className="h-3.5 w-3.5" />
-                </button>
-              </li>
-            ))}
-          </ul>
+          {invoices.length === 0 ? (
+            <p className="flex items-center gap-2 py-3 text-sm text-stone-500">
+              <Receipt className="h-4 w-4" />
+              Aún no hay facturas — aparecerán aquí con tu primer cobro.
+            </p>
+          ) : (
+            <ul className="divide-y divide-stone-100">
+              {invoices.map((inv) => (
+                <li key={inv.id} className="flex items-center gap-3 py-3 text-sm">
+                  <span className="tnum font-mono text-xs text-stone-500">{inv.id}</span>
+                  <span className="text-stone-500">
+                    {new Date(inv.date).toLocaleDateString("es-MX", {
+                      month: "long",
+                      year: "numeric",
+                    })}
+                  </span>
+                  <span className="ml-auto font-semibold text-ink tnum">
+                    {formatPrice(inv.amountCents)}
+                  </span>
+                  <span
+                    className={cn(
+                      "rounded-full px-2.5 py-0.5 text-xs font-semibold",
+                      inv.status === "pagada"
+                        ? "bg-success-bg text-success"
+                        : "bg-warning/10 text-warning",
+                    )}
+                  >
+                    {inv.status}
+                  </span>
+                  {inv.url && (
+                    <a
+                      href={inv.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label={`Ver factura ${inv.id} en Stripe`}
+                      className="grid h-8 w-8 place-items-center rounded-lg border border-stone-200 text-stone-400 transition-colors hover:border-stone-400 hover:text-ink"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </a>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
         </CardBody>
       </Card>
     </div>
