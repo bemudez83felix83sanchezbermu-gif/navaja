@@ -1094,6 +1094,19 @@ export async function deleteBarber(id: UUID): Promise<"deleted" | "deactivated">
  * Reservar (público — vía RPC con la llave anon, igual que en prod)
  * ------------------------------------------------------------------ */
 
+export type BookAppointmentResult =
+  | {
+      ok: true;
+      id: UUID;
+      /** null = cita firme (sin anticipo). Número = centavos que MP debe cobrar. */
+      paymentDueCents: number | null;
+      /** ISO — vive solo con paymentDueCents !== null (fin del hold de 15 min). */
+      paymentExpiresAt: string | null;
+      /** Nombre del servicio para el título de la preferencia MP; solo con pago. */
+      serviceName: string | null;
+    }
+  | { ok: false; error: string };
+
 export async function bookAppointment(input: {
   shopId: UUID;
   serviceId: UUID;
@@ -1103,7 +1116,7 @@ export async function bookAppointment(input: {
   phone: string;
   email?: string;
   notes?: string;
-}): Promise<{ ok: true; id: UUID } | { ok: false; error: string }> {
+}): Promise<BookAppointmentResult> {
   const { data, error } = await dbAnon().rpc("book_appointment", {
     p_shop: input.shopId,
     p_service: input.serviceId,
@@ -1131,5 +1144,122 @@ export async function bookAppointment(input: {
     const msg = known.find((k) => error.message.includes(k));
     return { ok: false, error: msg ?? "No pudimos completar la reserva." };
   }
-  return { ok: true, id: data as UUID };
+  // v2 de la RPC devuelve jsonb: id + (payment_due_cents, payment_expires_at,
+  // service_name) sólo cuando la cita nace con hold de pago.
+  const row = data as {
+    id: UUID;
+    payment_due_cents: number | null;
+    payment_expires_at: string | null;
+    service_name: string | null;
+  };
+  return {
+    ok: true,
+    id: row.id,
+    paymentDueCents: row.payment_due_cents,
+    paymentExpiresAt: row.payment_expires_at,
+    serviceName: row.service_name,
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Pagos (Track A): estado de cita para la página de retorno + confirmación
+ * ------------------------------------------------------------------ */
+
+/**
+ * Estado mínimo de una cita para el polling del cliente en la página de
+ * retorno de pago. Filtra por slug+id (defensa contra IDOR: quien conoce el
+ * id no puede consultarla desde otro shop) y devuelve SOLO status + expiración
+ * — cero PII, cero monto en centavos.
+ */
+export async function getAppointmentPaymentStatus(
+  shopSlug: string,
+  appointmentId: UUID,
+): Promise<{ status: AppointmentStatus; paymentExpiresAt: string | null } | null> {
+  const shop = await shopRowBySlug(shopSlug);
+  if (!shop) return null;
+  const { data, error } = await dbAdmin()
+    .from("appointments")
+    .select("status, payment_expires_at")
+    .eq("id", appointmentId)
+    .eq("barbershop_id", shop.id)
+    .maybeSingle();
+  if (error) throw new Error(`[db:appt.paymentStatus] ${error.message}`);
+  if (!data) return null;
+  return {
+    status: data.status as AppointmentStatus,
+    paymentExpiresAt: data.payment_expires_at ?? null,
+  };
+}
+
+/**
+ * Cuenta MP activa de la barbería DUEÑA de esta cita — la vía que usan tanto
+ * `book` (crear preferencia) como el webhook (consultar el pago). Devuelve
+ * tokens en CLARO ya desencriptados; solo debe llamarse desde código servidor
+ * y su salida NUNCA cruza al cliente.
+ *
+ * Cambia el `status` a 'error_refresh' si el refresh en `mp.ts` falla; ese
+ * mismo estado apaga el flujo de cobro para nuevas reservas
+ * (`book_appointment` mira `status = 'activa'`).
+ */
+export interface PaymentAccountSecrets {
+  barbershopId: UUID;
+  mpUserId: string;
+  accessToken: string;
+  refreshToken: string;
+  tokenExpiresAt: string;
+  liveMode: boolean;
+  status: "activa" | "error_refresh" | "desconectada";
+}
+
+/** Lee y desencripta los tokens MP de la barbería. */
+export async function getPaymentAccountSecrets(
+  shopId: UUID,
+): Promise<PaymentAccountSecrets | null> {
+  const { decryptToken } = await import("@/lib/security/crypto");
+  const { data, error } = await dbAdmin()
+    .from("payment_accounts")
+    .select(
+      "barbershop_id, mp_user_id, access_token_enc, refresh_token_enc, token_expires_at, live_mode, status",
+    )
+    .eq("barbershop_id", shopId)
+    .maybeSingle();
+  if (error) throw new Error(`[db:payment.secrets] ${error.message}`);
+  if (!data) return null;
+  return {
+    barbershopId: data.barbershop_id as UUID,
+    mpUserId: data.mp_user_id,
+    accessToken: decryptToken(data.access_token_enc),
+    refreshToken: decryptToken(data.refresh_token_enc),
+    tokenExpiresAt: data.token_expires_at,
+    liveMode: data.live_mode,
+    status: data.status,
+  };
+}
+
+/**
+ * Confirma la cita cuando el webhook de MP nos avisa que el pago fue aprobado.
+ * La RPC hace todo en un solo commit y es idempotente por `mp_payment_id`.
+ *
+ * - 'already_processed' → webhook reintentado con el mismo pago (2xx tranquilo).
+ * - 'already_confirmed' → dos webhooks distintos para la misma cita (raro pero
+ *   posible con reintentos rebeldes) — el pago se registró como aprobado
+ *   igual, el caller decide si reembolsa (default: sí, es un doble cobro).
+ * - 'confirmed'        → cita movida a 'confirmada', notificaciones insertadas.
+ * - 'race_conflict'    → el hold expiró (o el dueño canceló) antes del webhook;
+ *   el pago quedó registrado para auditoría y el caller debe reembolsar.
+ */
+export async function confirmPaidAppointment(input: {
+  appointmentId: UUID;
+  mpPaymentId: string;
+  amountCents: number;
+  raw?: unknown;
+}): Promise<"confirmed" | "already_processed" | "already_confirmed" | "race_conflict"> {
+  const { data, error } = await dbAdmin().rpc("confirm_paid_appointment", {
+    p_appt_id: input.appointmentId,
+    p_mp_payment_id: input.mpPaymentId,
+    p_amount_cents: input.amountCents,
+    p_raw: input.raw ?? null,
+  });
+  if (error) throw new Error(`[db:payment.confirm] ${error.message}`);
+  return data as "confirmed" | "already_processed" | "already_confirmed" | "race_conflict";
 }

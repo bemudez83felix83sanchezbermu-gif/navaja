@@ -152,7 +152,17 @@ grant select on busy_slots to anon, authenticated;
 -- ---- Reserva segura (única vía de escritura para anon) --------------------
 -- Valida todo del lado servidor, hace upsert del cliente y crea la cita. La
 -- restricción de exclusión (schema.sql) es el seguro final contra doble reserva.
-create or replace function book_appointment(
+--
+-- v2 (Track A de PAGOS.md): si la barbería tiene payment_mode <> 'off' Y una
+-- cuenta MP activa, la cita nace en 'pendiente_pago' con hold de 15 min y las
+-- notificaciones se retrasan hasta que el webhook confirme el pago. El monto a
+-- cobrar se calcula server-side (no viene del cliente).
+--
+-- ⚠️ El tipo de retorno cambió (uuid → jsonb), por eso `drop function` primero:
+-- `create or replace` NO permite cambiar el retorno. Sin re-aplicar el
+-- revoke/grant, el wizard público falla en silencio.
+drop function if exists book_appointment(uuid,uuid,uuid,timestamptz,text,text,text,text);
+create function book_appointment(
   p_shop    uuid,
   p_service uuid,
   p_barber  uuid,            -- null => "cualquiera disponible"
@@ -161,11 +171,14 @@ create or replace function book_appointment(
   p_phone   text,
   p_email   text default null,
   p_notes   text default null
-) returns uuid
+) returns jsonb
 language plpgsql security definer set search_path = public, pg_temp as $$
 declare
   v_dur int; v_price int; v_end timestamptz; v_barber uuid; v_client uuid; v_appt uuid;
   v_shop record; v_svc_name text; v_barber_name text; v_when text;
+  v_has_mp_account boolean := false;
+  v_pay_due int; v_pay_expires timestamptz;
+  v_appt_status appointment_status;
 begin
   -- 0) Saneo básico (el app valida también; esto es belt-and-suspenders).
   if char_length(coalesce(p_name,'')) not between 2 and 80 then
@@ -183,7 +196,31 @@ begin
   select * into v_shop from barbershops where id = p_shop;
   if not found then raise exception 'Barbería inválida'; end if;
 
-  -- 2) Elegir barbero (el indicado, o el primero libre que haga el servicio).
+  -- 2) ¿Se cobra anticipo? Solo con modo <> 'off' Y cuenta MP activa. Sin
+  --    cuenta conectada, `payment_mode` de la barbería NO surte efecto
+  --    (default seguro: la cita nace como siempre).
+  select exists (
+    select 1 from payment_accounts
+    where barbershop_id = p_shop and status = 'activa'
+  ) into v_has_mp_account;
+
+  if v_shop.payment_mode <> 'off' and v_has_mp_account then
+    v_pay_due := case v_shop.payment_mode
+      when 'anticipo_fijo' then v_shop.payment_deposit_cents
+      when 'porcentaje'    then greatest(1, round(v_price * v_shop.payment_percent / 100.0)::int)
+      when 'total'         then v_price
+      else 0
+    end;
+    v_pay_expires := now() + interval '15 minutes';
+    v_appt_status := 'pendiente_pago';
+  else
+    -- Sin pago: auto_confirm decide (comportamiento original).
+    v_appt_status := case when v_shop.auto_confirm then 'confirmada'::appointment_status
+                          else 'pendiente'::appointment_status end;
+  end if;
+
+  -- 3) Elegir barbero (el indicado, o el primero libre que haga el servicio).
+  --    'pendiente_pago' cuenta como slot ocupado — el hold bloquea igual.
   if p_barber is not null then
     if not exists (
       select 1 from barber_services bs join barbers b on b.id = bs.barber_id
@@ -205,48 +242,59 @@ begin
     if v_barber is null then raise exception 'Sin disponibilidad'; end if;
   end if;
 
-  -- 3) Upsert del cliente por (barbería, teléfono).
+  -- 4) Upsert del cliente por (barbería, teléfono).
   insert into clients (barbershop_id, name, phone, email, notes)
   values (p_shop, p_name, p_phone, nullif(p_email,''), nullif(p_notes,''))
   on conflict (barbershop_id, phone) do update set name = excluded.name
   returning id into v_client;
 
-  -- 4) Crear la cita (la exclusion constraint bloquea el doble booking en carrera).
-  --    auto_confirm (regla de reserva del dueño) decide el estado inicial.
+  -- 5) Crear la cita (la exclusion constraint bloquea el doble booking en carrera).
   insert into appointments
-    (barbershop_id, barber_id, service_id, client_id, starts_at, ends_at, status, price_cents, notes)
+    (barbershop_id, barber_id, service_id, client_id, starts_at, ends_at,
+     status, price_cents, notes, payment_expires_at)
   values
     (p_shop, v_barber, p_service, v_client, p_start, v_end,
-     case when v_shop.auto_confirm then 'confirmada'::appointment_status
-          else 'pendiente'::appointment_status end,
-     v_price, nullif(p_notes,''))
+     v_appt_status, v_price, nullif(p_notes,''),
+     case when v_appt_status = 'pendiente_pago' then v_pay_expires else null end)
   returning id into v_appt;
 
-  -- 5) Registrar notificaciones salientes (mismo commit que la cita).
-  select name into v_barber_name from barbers where id = v_barber;
-  v_when := to_char(p_start at time zone v_shop.timezone, 'DD/MM/YYYY HH24:MI');
+  -- 6) Notificaciones: SOLO si la cita ya quedó firme. Con hold de pago las
+  --    manda confirm_paid_appointment cuando el webhook confirme (evita
+  --    avisar de citas que van a expirar sin pago).
+  if v_appt_status <> 'pendiente_pago' then
+    select name into v_barber_name from barbers where id = v_barber;
+    v_when := to_char(p_start at time zone v_shop.timezone, 'DD/MM/YYYY HH24:MI');
 
-  if v_shop.notif_owner_new_booking and coalesce(v_shop.notif_owner_phone,'') <> '' then
-    insert into notifications_log
-      (barbershop_id, appointment_id, channel, audience, recipient, subject, body)
-    values
-      (p_shop, v_appt, 'whatsapp', 'dueno', v_shop.notif_owner_phone,
-       'Nueva reserva: ' || p_name,
-       p_name || ' reservó ' || v_svc_name || ' con ' || v_barber_name ||
-       ' el ' || v_when || '. Tel: ' || p_phone);
+    if v_shop.notif_owner_new_booking and coalesce(v_shop.notif_owner_phone,'') <> '' then
+      insert into notifications_log
+        (barbershop_id, appointment_id, channel, audience, recipient, subject, body)
+      values
+        (p_shop, v_appt, 'whatsapp', 'dueno', v_shop.notif_owner_phone,
+         'Nueva reserva: ' || p_name,
+         p_name || ' reservó ' || v_svc_name || ' con ' || v_barber_name ||
+         ' el ' || v_when || '. Tel: ' || p_phone);
+    end if;
+
+    if v_shop.notif_confirmation_email and coalesce(p_email,'') <> '' then
+      insert into notifications_log
+        (barbershop_id, appointment_id, channel, audience, recipient, subject, body)
+      values
+        (p_shop, v_appt, 'email', 'cliente', p_email,
+         'Tu reserva en ' || v_shop.name,
+         'Hola ' || p_name || ', tu cita de ' || v_svc_name || ' con ' || v_barber_name ||
+         ' quedó agendada para el ' || v_when || '.');
+    end if;
   end if;
 
-  if v_shop.notif_confirmation_email and coalesce(p_email,'') <> '' then
-    insert into notifications_log
-      (barbershop_id, appointment_id, channel, audience, recipient, subject, body)
-    values
-      (p_shop, v_appt, 'email', 'cliente', p_email,
-       'Tu reserva en ' || v_shop.name,
-       'Hola ' || p_name || ', tu cita de ' || v_svc_name || ' con ' || v_barber_name ||
-       ' quedó agendada para el ' || v_when || '.');
-  end if;
-
-  return v_appt;
+  -- Payload compacto: sin pago → id + payment_due null. Con pago → monto,
+  -- expiración y nombre del servicio (para el título de la preferencia MP —
+  -- se calcula acá y no en el action para evitar otra query).
+  return jsonb_build_object(
+    'id', v_appt,
+    'payment_due_cents',   case when v_appt_status = 'pendiente_pago' then v_pay_due end,
+    'payment_expires_at',  case when v_appt_status = 'pendiente_pago' then v_pay_expires end,
+    'service_name',        case when v_appt_status = 'pendiente_pago' then v_svc_name end
+  );
 exception
   when exclusion_violation then raise exception 'Ese horario acaba de ocuparse';
 end $$;
@@ -255,3 +303,95 @@ end $$;
 revoke all on function book_appointment(uuid,uuid,uuid,timestamptz,text,text,text,text) from public;
 grant execute on function book_appointment(uuid,uuid,uuid,timestamptz,text,text,text,text)
   to anon, authenticated;
+
+-- ---- Confirmar cita por webhook de pago aprobado (Track A) ------------------
+-- Llamada por el webhook de Mercado Pago con service_role, en un solo commit:
+--   1) inserta el payment (idempotente por mp_payment_id unique — MP reintenta)
+--   2) mueve la cita de 'pendiente_pago' → 'confirmada' de forma condicional
+--   3) inserta las notificaciones (dueño + cliente) que book_appointment se
+--      saltó por venir con hold de pago
+-- La transición condicional evita la carrera cancela-vs-confirma: si el hold
+-- ya expiró (pg_cron marcó cancelada) o el dueño canceló, no revivimos la
+-- cita — el caller (webhook) detecta 'race_conflict' y dispara un refund.
+create or replace function confirm_paid_appointment(
+  p_appt_id      uuid,
+  p_mp_payment_id text,
+  p_amount_cents int,
+  p_raw          jsonb default null
+) returns text
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  v_shop_id uuid; v_shop_row barbershops%rowtype;
+  v_client_name text; v_client_email text; v_client_phone text;
+  v_svc_name text; v_barber_name text; v_when text; v_prev appointment_status;
+  v_pay_inserted uuid;
+begin
+  -- 1) Insert idempotente del pago. Si ya existía (webhook reintentado),
+  --    salimos sin hacer nada — éxito idempotente.
+  insert into payments (barbershop_id, appointment_id, mp_payment_id,
+                        amount_cents, status, raw)
+  select a.barbershop_id, a.id, p_mp_payment_id, p_amount_cents, 'aprobado', p_raw
+  from appointments a where a.id = p_appt_id
+  on conflict (mp_payment_id) do nothing
+  returning id into v_pay_inserted;
+
+  if v_pay_inserted is null then
+    return 'already_processed';
+  end if;
+
+  -- 2) Transición atómica. Cero filas = perdimos la carrera (hold expirado o
+  --    cancelación manual) → el caller reembolsa; el payment queda registrado
+  --    para auditoría y refund posterior.
+  update appointments
+     set status = 'confirmada', payment_expires_at = null
+   where id = p_appt_id and status = 'pendiente_pago'
+   returning barbershop_id into v_shop_id;
+
+  if v_shop_id is null then
+    select status into v_prev from appointments where id = p_appt_id;
+    if v_prev = 'confirmada' then return 'already_confirmed'; end if;
+    return 'race_conflict';
+  end if;
+
+  -- 3) Notificaciones (equivalente a las que book_appointment omitió).
+  select * into v_shop_row from barbershops where id = v_shop_id;
+  select c.name, c.email, c.phone
+    into v_client_name, v_client_email, v_client_phone
+    from appointments a join clients c on c.id = a.client_id
+   where a.id = p_appt_id;
+  select s.name, b.name into v_svc_name, v_barber_name
+    from appointments a
+    join services s on s.id = a.service_id
+    join barbers  b on b.id = a.barber_id
+   where a.id = p_appt_id;
+  select to_char(a.starts_at at time zone v_shop_row.timezone, 'DD/MM/YYYY HH24:MI')
+    into v_when from appointments a where a.id = p_appt_id;
+
+  if v_shop_row.notif_owner_new_booking and coalesce(v_shop_row.notif_owner_phone,'') <> '' then
+    insert into notifications_log
+      (barbershop_id, appointment_id, channel, audience, recipient, subject, body)
+    values
+      (v_shop_id, p_appt_id, 'whatsapp', 'dueno', v_shop_row.notif_owner_phone,
+       'Nueva reserva pagada: ' || v_client_name,
+       v_client_name || ' pagó ' || v_svc_name || ' con ' || v_barber_name ||
+       ' el ' || v_when || '. Tel: ' || v_client_phone ||
+       '. Anticipo: $' || trim(to_char(p_amount_cents / 100.0, 'FM999999990.00')) || ' MXN');
+  end if;
+
+  if v_shop_row.notif_confirmation_email and coalesce(v_client_email,'') <> '' then
+    insert into notifications_log
+      (barbershop_id, appointment_id, channel, audience, recipient, subject, body)
+    values
+      (v_shop_id, p_appt_id, 'email', 'cliente', v_client_email,
+       'Tu reserva en ' || v_shop_row.name,
+       'Hola ' || v_client_name || ', tu cita de ' || v_svc_name || ' con ' ||
+       v_barber_name || ' quedó confirmada para el ' || v_when ||
+       '. Anticipo recibido: $' ||
+       trim(to_char(p_amount_cents / 100.0, 'FM999999990.00')) || ' MXN.');
+  end if;
+
+  return 'confirmed';
+end $$;
+
+-- Solo el backend (service_role) llama esta función; no se expone a anon/authenticated.
+revoke all on function confirm_paid_appointment(uuid, text, int, jsonb) from public;

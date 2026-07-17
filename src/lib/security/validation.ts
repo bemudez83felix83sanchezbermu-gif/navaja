@@ -82,6 +82,9 @@ export const RESERVED_SLUGS = new Set([
   "soporte", "ayuda", "blog", "docs", "status", "cdn", "assets", "dominios",
   // rutas de cuenta y legales (src/app/*): un tenant con este slug las taparía
   "login", "registro", "recuperar", "restablecer", "auth", "legal", "cuenta",
+  // rutas de pagos (Track A): /[shop]/pago/[cita] no debe colisionar con
+  // un slug de barbería llamado "pago".
+  "pago", "pagos",
 ]);
 
 /**
@@ -260,6 +263,11 @@ export const envSchema = z.object({
   NEXT_PUBLIC_SUPABASE_URL: z.string().url().optional(),
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(20).optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(20).optional(),
+  // Origen absoluto donde vive la app (https://…). Lo usa el cliente de MP para
+  // construir back_urls y notification_url. Solo `NEXT_PUBLIC_` porque también
+  // se lee en client components de UI; el navegador nunca lo puede alterar
+  // porque el que crea la preferencia es siempre el servidor.
+  NEXT_PUBLIC_APP_URL: z.string().url().optional(),
   // Mercado Pago — anticipos de reserva (Track A de PAGOS.md). Secretos de la
   // aplicación OAuth de Navaja; los tokens POR BARBERÍA viven cifrados en la
   // tabla payment_accounts, no aquí.

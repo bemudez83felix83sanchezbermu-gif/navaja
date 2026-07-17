@@ -159,6 +159,13 @@ export function BookingWizard({
         startedAt: startedAt.current ?? Date.now(),
       });
       if (res.ok) {
+        // Track A: si la barbería cobra anticipo, el action nos devuelve la URL
+        // hosteada de MP. Salimos del wizard hacia Checkout Pro — la página de
+        // retorno hará polling hasta que el webhook confirme.
+        if ("checkoutUrl" in res) {
+          window.location.assign(res.checkoutUrl);
+          return;
+        }
         setConfirmationId(res.confirmationId);
         setDone(true);
       } else {
