@@ -39,6 +39,7 @@
   --color-destructive: #dc2626;
   --color-destructive-bg: #fef2f2;
   --color-info: #0369a1;
+  --color-info-bg: #f0f9ff;
 
   /* ---- Typography ---- */
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
@@ -98,6 +99,7 @@
   --color-destructive: #f87171;
   --color-destructive-bg: #3a1515;
   --color-info: #38bdf8;
+  --color-info-bg: #0c2836;
 
   --color-gold-400: #caa25a;
 

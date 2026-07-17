@@ -10,6 +10,7 @@ import {
   hostnameSchema,
   inviteMemberSchema,
   notificationsSchema,
+  paymentSettingsSchema,
   planIdSchema,
   RESERVED_SLUGS,
   shopProfileSchema,
@@ -84,6 +85,40 @@ export async function updateBookingRules(raw: unknown): Promise<ActionResult> {
   }
   refresh();
   return { ok: true, message: "Reglas de reserva actualizadas." };
+}
+
+/* ---------------- Pagos (Track A) ---------------- */
+/**
+ * Guarda modo y monto de anticipo. Gate por plan aquí — la UI puede mentir,
+ * el server no. Coincide con addDomain, que también consulta `getPlan()`.
+ * Cambiar el modo NO afecta a citas ya en curso ni al hold pg_cron; solo a
+ * las próximas reservas del wizard público.
+ */
+export async function savePaymentRules(raw: unknown): Promise<ActionResult> {
+  const limited = await guard("payment-rules");
+  if (limited) return { ok: false, error: limited };
+
+  const parsed = paymentSettingsSchema.safeParse(raw);
+  if (!parsed.success) return fail(parsed.error);
+
+  try {
+    if (parsed.data.mode !== "off" && !(await db.getPlan()).payments) {
+      return {
+        ok: false,
+        error: "Los cobros en reservas son parte del plan Pro.",
+      };
+    }
+    await db.updatePaymentSettings(parsed.data);
+  } catch (e) {
+    return { ok: false, error: errMsg(e) };
+  }
+  refresh();
+  return {
+    ok: true,
+    message: parsed.data.mode === "off"
+      ? "Cobros de anticipo desactivados."
+      : "Configuración de pagos guardada.",
+  };
 }
 
 /* ---------------- Notificaciones ---------------- */

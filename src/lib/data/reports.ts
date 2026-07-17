@@ -58,6 +58,7 @@ const STATUS_LABEL: Record<string, string> = {
   completada: "Completada",
   confirmada: "Confirmada",
   pendiente: "Pendiente",
+  pendiente_pago: "Pago pendiente",
   cancelada: "Cancelada",
   no_show: "No asistió",
 };
@@ -171,7 +172,7 @@ export async function buildReport(from: Date, to: Date): Promise<Report> {
   });
 
   const byStatus = (
-    ["completada", "confirmada", "pendiente", "cancelada", "no_show"] as const
+    ["completada", "confirmada", "pendiente", "pendiente_pago", "cancelada", "no_show"] as const
   ).map((status) => {
     const count = rows.filter((a) => a.status === status).length;
     return {

@@ -15,6 +15,11 @@ const MAP: Record<
     className: "bg-warning-bg text-warning",
     dot: "bg-warning",
   },
+  pendiente_pago: {
+    label: "Pago pendiente",
+    className: "bg-info-bg text-info",
+    dot: "bg-info",
+  },
   completada: {
     label: "Completada",
     className: "bg-stone-100 text-stone-600",

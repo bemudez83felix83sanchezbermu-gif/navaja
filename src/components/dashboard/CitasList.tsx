@@ -21,6 +21,7 @@ const TABS: { id: CitasTab; label: string }[] = [
 const ESTADOS: { id: string; label: string }[] = [
   { id: "todos", label: "Todos los estados" },
   { id: "pendiente", label: "Pendiente" },
+  { id: "pendiente_pago", label: "Pago pendiente" },
   { id: "confirmada", label: "Confirmada" },
   { id: "completada", label: "Completada" },
   { id: "cancelada", label: "Cancelada" },

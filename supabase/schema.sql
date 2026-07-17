@@ -10,8 +10,13 @@ create extension if not exists btree_gist;     -- exclusion constraint (anti-sol
 -- ---- Enums ----------------------------------------------------------------
 do $$ begin
   create type appointment_status as enum
-    ('pendiente','confirmada','completada','cancelada','no_show');
+    ('pendiente','confirmada','completada','cancelada','no_show','pendiente_pago');
 exception when duplicate_object then null; end $$;
+-- DBs existentes (el create de arriba no-opea): agrega el valor del hold de
+-- pago. ⚠️ Debe correr en su PROPIA transacción — Postgres no permite usar un
+-- valor de enum nuevo en la misma transacción que lo agrega, y más abajo este
+-- archivo lo usa (exclusion constraint, índice parcial).
+alter type appointment_status add value if not exists 'pendiente_pago';
 
 do $$ begin
   create type member_role as enum ('owner','staff');
@@ -54,6 +59,13 @@ create table if not exists barbershops (
   notif_sender_name        text,
   -- Teléfono (WhatsApp) del dueño al que llegan las reservas nuevas
   notif_owner_phone        text check (notif_owner_phone ~ '^\+?[0-9 ]{8,20}$'),
+  -- Cobro de anticipos al reservar (Track A de PAGOS.md). Solo surte efecto
+  -- con una cuenta MP conectada en `payment_accounts`; default 'off' = nada
+  -- cambia para barberías sin pagos.
+  payment_mode          text not null default 'off'
+                        check (payment_mode in ('off','anticipo_fijo','porcentaje','total')),
+  payment_deposit_cents int not null default 0 check (payment_deposit_cents >= 0),
+  payment_percent       int not null default 50 check (payment_percent between 1 and 100),
   -- Dueño mostrado en /configuracion/equipo hasta que exista auth real
   owner_name  text,
   owner_email text,
@@ -174,15 +186,19 @@ create table if not exists appointments (
   status         appointment_status not null default 'pendiente',
   price_cents    int not null check (price_cents >= 0),
   notes          text,
+  -- Solo citas 'pendiente_pago': fin del hold de 15 min que bloquea el slot
+  -- mientras el cliente paga en Mercado Pago. pg_cron libera los vencidos.
+  payment_expires_at timestamptz,
   created_at     timestamptz not null default now(),
   check (ends_at > starts_at),
   -- DB-level guarantee against double-booking the same barber for overlapping
   -- time ranges (ignores cancelled/no-show). This is the last line of defense
-  -- even if app logic has a race condition.
+  -- even if app logic has a race condition. 'pendiente_pago' cuenta: el hold
+  -- ocupa el slot igual que una cita real.
   constraint no_barber_overlap exclude using gist (
     barber_id with =,
     tstzrange(starts_at, ends_at) with &&
-  ) where (status in ('pendiente','confirmada','completada'))
+  ) where (status in ('pendiente','confirmada','completada','pendiente_pago'))
 );
 
 -- ---- Registro de notificaciones salientes ----------------------------------
@@ -205,6 +221,41 @@ create table if not exists notifications_log (
   created_at     timestamptz not null default now()
 );
 
+-- ---- Pagos (Track A de PAGOS.md): cuenta MP conectada por barbería ----------
+-- Tokens SIEMPRE cifrados en reposo (AES-256-GCM con PAYMENTS_ENCRYPTION_KEY,
+-- que vive solo en el env del servidor). Nunca llegan al navegador ni a logs.
+-- RLS en policies.sql: lectura solo miembros (sin columnas *_enc); escrituras
+-- solo service_role (callback OAuth / renovación lazy de tokens).
+create table if not exists payment_accounts (
+  id                uuid primary key default gen_random_uuid(),
+  barbershop_id     uuid not null unique references barbershops(id) on delete cascade,
+  mp_user_id        text not null,
+  access_token_enc  text not null,
+  refresh_token_enc text not null,
+  -- MP expira tokens a 180 días (refresh de un solo uso): renovación lazy al
+  -- crear cada checkout cuando falten <30 días; si falla → 'error_refresh'.
+  token_expires_at  timestamptz not null,
+  live_mode         boolean not null default true,
+  status            text not null default 'activa'
+                    check (status in ('activa','error_refresh','desconectada')),
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now()
+);
+
+-- ---- Pagos: anticipos cobrados (un registro por pago de MP) -----------------
+-- `mp_payment_id` unique = idempotencia del webhook (MP reintenta avisos).
+-- `raw` guarda la respuesta de la API de MP para auditoría/disputas.
+create table if not exists payments (
+  id             uuid primary key default gen_random_uuid(),
+  barbershop_id  uuid not null references barbershops(id) on delete cascade,
+  appointment_id uuid not null references appointments(id) on delete cascade,
+  mp_payment_id  text not null unique,
+  amount_cents   int not null check (amount_cents > 0),
+  status         text not null check (status in ('aprobado','rechazado','reembolsado')),
+  raw            jsonb,
+  created_at     timestamptz not null default now()
+);
+
 -- ---- Indexes --------------------------------------------------------------
 create index if not exists idx_barbers_shop      on barbers(barbershop_id);
 create index if not exists idx_services_shop     on services(barbershop_id);
@@ -215,3 +266,21 @@ create index if not exists idx_memberships_user  on memberships(user_id);
 create index if not exists idx_domains_shop      on domains(barbershop_id);
 create index if not exists idx_invitations_shop  on invitations(barbershop_id);
 create index if not exists idx_notif_shop_time   on notifications_log(barbershop_id, created_at desc);
+create index if not exists idx_payments_shop_time on payments(barbershop_id, created_at desc);
+create index if not exists idx_payments_appt      on payments(appointment_id);
+-- Parcial: solo holds vivos — lo barre el job de pg_cron cada minuto.
+create index if not exists idx_appts_payment_hold on appointments(payment_expires_at)
+  where status = 'pendiente_pago';
+
+-- ---- pg_cron: libera holds de pago vencidos ---------------------------------
+-- Si el cliente no pagó dentro de la ventana, la cita se cancela y el slot
+-- reaparece. Un pago aprobado que llegue DESPUÉS se reembolsa automáticamente
+-- (ver PAGOS.md A4). `cron.schedule` con nombre es idempotente (reemplaza).
+create extension if not exists pg_cron;
+select cron.schedule(
+  'expire-payment-holds',
+  '* * * * *',
+  $$update appointments
+      set status = 'cancelada'
+      where status = 'pendiente_pago' and payment_expires_at < now()$$
+);

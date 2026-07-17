@@ -35,6 +35,8 @@ alter table domains        enable row level security;
 alter table invitations    enable row level security;
 alter table subscriptions  enable row level security;
 alter table notifications_log enable row level security;
+alter table payment_accounts enable row level security;
+alter table payments        enable row level security;
 
 -- ---- barbershops ----------------------------------------------------------
 create policy barbershops_public_read on barbershops
@@ -51,6 +53,7 @@ grant select (
   open_days, open_hour, close_hour,
   slot_step_min, min_notice_min, max_advance_days,
   auto_confirm, cancel_window_hours, allow_barber_choice, require_email,
+  payment_mode, payment_deposit_cents, payment_percent,
   rating, reviews, created_at
 ) on barbershops to anon, authenticated;
 
@@ -110,12 +113,30 @@ create policy subscriptions_member_read on subscriptions
 create policy notifications_member_all on notifications_log
   for all using (app_is_member(barbershop_id)) with check (app_is_member(barbershop_id));
 
+-- ---- payment_accounts (tokens MP cifrados — lo MÁS sensible del esquema) ----
+-- Lectura: miembros, y SOLO columnas de estado (nunca *_enc; privilegios de
+-- columna, mismo patrón que barbershops). Escrituras: únicamente service_role
+-- (callback OAuth y renovación de tokens) — sin política de escritura a
+-- propósito. anon: cero acceso.
+create policy payment_accounts_member_read on payment_accounts
+  for select using (app_is_member(barbershop_id));
+revoke all on payment_accounts from anon, authenticated;
+grant select (id, barbershop_id, mp_user_id, token_expires_at, live_mode,
+              status, created_at, updated_at)
+  on payment_accounts to authenticated;
+
+-- ---- payments (auditoría de cobros — lectura solo miembros) -----------------
+-- Inserta el webhook de MP vía RPC/service_role; nadie más escribe.
+create policy payments_member_read on payments
+  for select using (app_is_member(barbershop_id));
+
 -- Defensa en profundidad: revoca privilegios de tabla a anon en datos sensibles.
 revoke all on clients       from anon;
 revoke all on appointments  from anon;
 revoke all on invitations   from anon;
 revoke all on subscriptions from anon;
 revoke all on notifications_log from anon;
+revoke all on payments      from anon;
 
 -- ---- Vista pública de horarios ocupados (sin PII) -------------------------
 -- Expone SOLO barbero + rango horario para que el cliente calcule disponibilidad.
@@ -124,7 +145,8 @@ revoke all on notifications_log from anon;
 create or replace view busy_slots with (security_invoker = off) as
   select barbershop_id, barber_id, starts_at, ends_at
   from appointments
-  where status in ('pendiente','confirmada','completada');
+  -- 'pendiente_pago' ocupa el slot mientras dura el hold de pago (sigue sin PII).
+  where status in ('pendiente','confirmada','completada','pendiente_pago');
 grant select on busy_slots to anon, authenticated;
 
 -- ---- Reserva segura (única vía de escritura para anon) --------------------
@@ -176,7 +198,7 @@ begin
       and not exists (
         select 1 from appointments a
         where a.barber_id = b.id
-          and a.status in ('pendiente','confirmada','completada')
+          and a.status in ('pendiente','confirmada','completada','pendiente_pago')
           and tstzrange(a.starts_at, a.ends_at) && tstzrange(p_start, v_end)
       )
     order by random() limit 1;

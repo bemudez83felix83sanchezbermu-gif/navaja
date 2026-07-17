@@ -15,6 +15,8 @@ import type {
   Member,
   NotificationEntry,
   NotificationSettings,
+  PaymentAccount,
+  PaymentSettings,
   Plan,
   PlanId,
   Service,
@@ -67,6 +69,9 @@ interface ShopRow {
   notif_owner_new_booking: boolean;
   notif_sender_name: string | null;
   notif_owner_phone: string | null;
+  payment_mode: string;
+  payment_deposit_cents: number;
+  payment_percent: number;
   owner_name: string | null;
   owner_email: string | null;
   rating: number;
@@ -121,6 +126,7 @@ interface ApptRow {
   status: AppointmentStatus;
   price_cents: number;
   notes: string | null;
+  payment_expires_at: string | null;
   barber?: BarberRow;
   service?: ServiceRow;
   client?: ClientRow;
@@ -165,6 +171,12 @@ const mapRules = (r: ShopRow): BookingRules => ({
   cancellationWindowHours: r.cancel_window_hours,
   allowBarberChoice: r.allow_barber_choice,
   requireEmail: r.require_email,
+});
+
+const mapPaymentSettings = (r: ShopRow): PaymentSettings => ({
+  mode: r.payment_mode as PaymentSettings["mode"],
+  depositCents: r.payment_deposit_cents,
+  percent: r.payment_percent,
 });
 
 const mapNotifications = (r: ShopRow): NotificationSettings => ({
@@ -223,6 +235,7 @@ const mapAppt = (r: ApptRow): Appointment => ({
   status: r.status,
   priceCents: r.price_cents,
   notes: r.notes ?? undefined,
+  paymentExpiresAt: r.payment_expires_at ?? undefined,
 });
 
 const mapDetailed = (r: ApptRow): AppointmentDetailed => ({
@@ -274,6 +287,11 @@ export async function getShopBySlug(slug: string): Promise<Barbershop | null> {
 
 export async function getBookingRules(slug?: string): Promise<BookingRules> {
   return mapRules(await mustShopRow(slug));
+}
+
+/** Config de anticipos (Track A). El wizard y el panel Pagos la leen server-side. */
+export async function getPaymentSettings(slug?: string): Promise<PaymentSettings> {
+  return mapPaymentSettings(await mustShopRow(slug));
 }
 
 export async function getNotifications(): Promise<NotificationSettings> {
@@ -416,6 +434,8 @@ export async function kpisForToday(): Promise<Kpis> {
       .gte("created_at", weekStart.toISOString()),
   ]);
 
+  // 'pendiente_pago' cuenta como activa a propósito: el hold ocupa la silla
+  // (afecta ocupación) aunque aún no sume ingresos ni sea "próxima cita".
   const active = todays.filter((a) => a.status !== "cancelada");
   const revenue = todays
     .filter((a) => a.status === "completada" || a.status === "confirmada")
@@ -579,6 +599,39 @@ export async function updateSlug(slug: string): Promise<void> {
     if (error.code === "23505") throw new Error("Ese subdominio ya está ocupado.");
     throw new Error(`[db:slug] ${error.message}`);
   }
+}
+
+export async function updatePaymentSettings(s: PaymentSettings): Promise<void> {
+  const shop = await mustShopRow();
+  const { error } = await dbAdmin()
+    .from("barbershops")
+    .update({
+      payment_mode: s.mode,
+      payment_deposit_cents: s.depositCents,
+      payment_percent: s.percent,
+    })
+    .eq("id", shop.id);
+  if (error) throw new Error(`[db:payment.settings] ${error.message}`);
+}
+
+/** Estado de la cuenta MP conectada (sin tokens — RLS de columnas los oculta
+ *  incluso para service_role si consultáramos con anon key). Null = sin conectar. */
+export async function getPaymentAccount(): Promise<PaymentAccount | null> {
+  const shop = await mustShopRow();
+  const { data, error } = await dbAdmin()
+    .from("payment_accounts")
+    .select("barbershop_id, mp_user_id, live_mode, status, token_expires_at")
+    .eq("barbershop_id", shop.id)
+    .maybeSingle();
+  if (error) throw new Error(`[db:payment.account] ${error.message}`);
+  if (!data) return null;
+  return {
+    barbershopId: data.barbershop_id,
+    mpUserId: data.mp_user_id,
+    liveMode: data.live_mode,
+    status: data.status,
+    tokenExpiresAt: data.token_expires_at,
+  };
 }
 
 export async function updateBookingRules(rules: BookingRules): Promise<void> {

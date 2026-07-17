@@ -127,6 +127,34 @@ export const bookingRulesSchema = z
   })
   .strict();
 
+/**
+ * Config de anticipos con Mercado Pago (Track A de PAGOS.md). El gate por plan
+ * (Pro/Estudio) vive en el server action; aquí solo validamos forma y montos.
+ *
+ * Reglas de monto (pregunta 3 de PAGOS.md, recomendación adoptada 2026-07-16):
+ * - Anticipo fijo mínimo $20 MXN (2000 centavos) — MP rechaza cobros muy
+ *   pequeños. Máximo $10 000 MXN es sanidad, no política.
+ * - Porcentaje 1–100 (el 100 permite exigir el total).
+ * El monto REAL a cobrar por reserva se recalcula server-side en la RPC, no
+ * viene del cliente — esto es solo la config.
+ */
+export const paymentSettingsSchema = z
+  .object({
+    mode: z.enum(["off", "anticipo_fijo", "porcentaje", "total"]),
+    depositCents: z.number().int().min(0).max(1_000_000),
+    percent: z.number().int().min(1).max(100),
+  })
+  .strict()
+  .superRefine((d, ctx) => {
+    if (d.mode === "anticipo_fijo" && d.depositCents < 2000) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["depositCents"],
+        message: "El anticipo mínimo es $20 MXN.",
+      });
+    }
+  });
+
 export const notificationsSchema = z
   .object({
     confirmationEmail: z.boolean(),
@@ -232,4 +260,15 @@ export const envSchema = z.object({
   NEXT_PUBLIC_SUPABASE_URL: z.string().url().optional(),
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(20).optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(20).optional(),
+  // Mercado Pago — anticipos de reserva (Track A de PAGOS.md). Secretos de la
+  // aplicación OAuth de Navaja; los tokens POR BARBERÍA viven cifrados en la
+  // tabla payment_accounts, no aquí.
+  MP_CLIENT_ID: z.string().min(1).optional(),
+  MP_CLIENT_SECRET: z.string().min(1).optional(),
+  MP_WEBHOOK_SECRET: z.string().min(1).optional(),
+  /** AES-256-GCM para tokens MP en reposo: 32 bytes en hex (64 chars). */
+  PAYMENTS_ENCRYPTION_KEY: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/i, "Deben ser 64 caracteres hex (32 bytes)")
+    .optional(),
 });

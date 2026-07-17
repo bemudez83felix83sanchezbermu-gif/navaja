@@ -14,6 +14,8 @@ export type UUID = string;
 export type AppointmentStatus =
   | "confirmada"
   | "pendiente"
+  /** hold de 15 min: bloquea el slot mientras el cliente paga el anticipo */
+  | "pendiente_pago"
   | "completada"
   | "cancelada"
   | "no_show";
@@ -87,6 +89,8 @@ export interface Appointment {
   status: AppointmentStatus;
   priceCents: number;
   notes?: string;
+  /** ISO — solo con status "pendiente_pago": cuándo expira el hold del slot */
+  paymentExpiresAt?: string;
 }
 
 /** Joined view used across the dashboard UI. */
@@ -118,6 +122,49 @@ export interface BookingRules {
   allowBarberChoice: boolean;
   /** ask for email in the booking form */
   requireEmail: boolean;
+}
+
+/* ---- Pagos (Track A de PAGOS.md: anticipos vía Mercado Pago) ------ */
+
+export type PaymentMode = "off" | "anticipo_fijo" | "porcentaje" | "total";
+
+/** Config de cobro de anticipos (Configuración → Pagos). Espejo de las
+ *  columnas `payment_*` de barbershops; solo surte efecto con cuenta MP
+ *  conectada y plan con `payments` (Pro/Estudio). */
+export interface PaymentSettings {
+  mode: PaymentMode;
+  /** anticipo fijo en centavos MXN (modo "anticipo_fijo") */
+  depositCents: number;
+  /** porcentaje del precio del servicio (modo "porcentaje"), 1–100 */
+  percent: number;
+}
+
+export type PaymentAccountStatus = "activa" | "error_refresh" | "desconectada";
+
+/** Cuenta de Mercado Pago conectada por OAuth (espejo de `payment_accounts`).
+ *  Los tokens cifrados NUNCA entran a este tipo: solo estado para la UI. */
+export interface PaymentAccount {
+  barbershopId: UUID;
+  mpUserId: string;
+  /** false = credenciales de sandbox */
+  liveMode: boolean;
+  status: PaymentAccountStatus;
+  /** ISO — MP expira tokens a 180 días; renovación lazy al cobrar */
+  tokenExpiresAt: string;
+}
+
+export type PaymentStatus = "aprobado" | "rechazado" | "reembolsado";
+
+/** Anticipo cobrado, registrado por el webhook de MP (espejo de `payments`). */
+export interface Payment {
+  id: UUID;
+  barbershopId: UUID;
+  appointmentId: UUID;
+  /** id del pago en MP — unique: idempotencia del webhook */
+  mpPaymentId: string;
+  amountCents: number;
+  status: PaymentStatus;
+  createdAt: string; // ISO
 }
 
 export interface NotificationSettings {
@@ -202,6 +249,8 @@ export interface Plan {
   maxAppointmentsPerMonth: number;
   customDomain: boolean;
   whatsapp: boolean;
+  /** cobro de anticipos con Mercado Pago (Track A) — exclusivo Pro/Estudio */
+  payments: boolean;
   highlights: string[];
 }
 

@@ -43,6 +43,12 @@ const TRANSITIONS: Record<AppointmentStatus, Transition[]> = {
     { status: "confirmada", label: "Confirmar", icon: Check, variant: "primary" },
     { status: "cancelada", label: "Cancelar cita", icon: X, variant: "ghost", destructive: true },
   ],
+  // Un hold de pago SOLO lo confirma el webhook de Mercado Pago (ya pagado).
+  // El dueño únicamente puede liberar el slot; si el pago llegara después,
+  // el webhook lo reembolsa automáticamente (PAGOS.md A4).
+  pendiente_pago: [
+    { status: "cancelada", label: "Cancelar (libera el horario)", icon: X, variant: "ghost", destructive: true },
+  ],
   confirmada: [
     { status: "completada", label: "Completar", icon: Check, variant: "primary" },
     { status: "no_show", label: "No asistió", icon: UserX, variant: "outline" },

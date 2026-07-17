@@ -14,6 +14,7 @@ export const PLANS: Plan[] = [
     maxAppointmentsPerMonth: 200,
     customDomain: false,
     whatsapp: false,
+    payments: false,
     highlights: [
       "Agenda y reservas ilimitadas por web",
       "Hasta 2 barberos",
@@ -29,6 +30,9 @@ export const PLANS: Plan[] = [
     maxAppointmentsPerMonth: 1000,
     customDomain: true,
     whatsapp: true,
+    // Cobros en reservas sin fee por transacción: el gancho del upgrade a Pro.
+    // (Se anuncia en highlights cuando Track A esté en producción.)
+    payments: true,
     highlights: [
       "Todo lo de Esencial",
       "Hasta 8 barberos",
@@ -45,6 +49,7 @@ export const PLANS: Plan[] = [
     maxAppointmentsPerMonth: 5000,
     customDomain: true,
     whatsapp: true,
+    payments: true,
     highlights: [
       "Todo lo de Pro",
       "Hasta 20 barberos y multi-sucursal",

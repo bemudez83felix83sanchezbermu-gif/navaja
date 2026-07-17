@@ -7,6 +7,7 @@ import {
   CalendarCog,
   CreditCard,
   Globe,
+  Landmark,
   Store,
   Users,
 } from "lucide-react";
@@ -17,6 +18,7 @@ const TABS = [
   { href: "/dashboard/configuracion/reservas", label: "Reservas", icon: CalendarCog },
   { href: "/dashboard/configuracion/dominio", label: "Dominio", icon: Globe },
   { href: "/dashboard/configuracion/notificaciones", label: "Notificaciones", icon: Bell },
+  { href: "/dashboard/configuracion/pagos", label: "Pagos", icon: Landmark },
   { href: "/dashboard/configuracion/equipo", label: "Equipo", icon: Users },
   { href: "/dashboard/configuracion/plan", label: "Plan y facturación", icon: CreditCard },
 ];
